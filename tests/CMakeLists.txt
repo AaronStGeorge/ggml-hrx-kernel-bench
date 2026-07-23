@@ -39,7 +39,9 @@ add_custom_target(
   kernel-yaml-route-import-v2
   DEPENDS
     kernel-llama-cpp-yaml-route-import-v2
+    kernel-llama-cpp-mul-mat-shards-yaml-route-import-v2
     kernel-model-llama-3-3-8b-q8-0-yaml-route-import-v2
     kernel-prepare-llama-cpp-v2-generated
+    kernel-prepare-llama-cpp-mul-mat-shards-v2-generated
     kernel-prepare-model-llama-3-3-8b-q8-0-v2-generated
 )

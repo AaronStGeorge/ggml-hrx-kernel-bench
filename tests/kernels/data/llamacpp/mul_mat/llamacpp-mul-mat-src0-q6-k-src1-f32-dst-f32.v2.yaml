@@ -1,0 +1,82 @@
+ops:
+  MUL_MAT:
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 1, 1, 1]
+        - dtype: f32
+          shape: [256, 64, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [1, 64, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 1, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 1, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 2, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 2, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 3, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 3, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 4, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 4, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 5, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 5, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 6, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 6, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 7, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 7, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 8, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 8, 1, 1]
+    - inputs:
+        - dtype: q6_K
+          shape: [256, 16, 1, 1]
+        - dtype: f32
+          shape: [256, 9, 1, 1]
+      destinations:
+        - dtype: f32
+          shape: [16, 9, 1, 1]

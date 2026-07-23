@@ -167,6 +167,56 @@ def _mul_mat_f32_f32_contiguous(
     }
 
 
+def _mul_mat_f32_f16_contiguous(
+    *,
+    rows: int,
+    cols: int,
+    k: int,
+) -> dict[str, ConcreteTensor]:
+    return {
+        "src0": _tensor(
+            dtype="F32",
+            sizes=(k, rows, 1, 1),
+            strides=(1, k, k * rows, k * rows),
+        ),
+        "src1": _tensor(
+            dtype="F16",
+            sizes=(k, cols, 1, 1),
+            strides=(1, k, k * cols, k * cols),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(rows, cols, 1, 1),
+            strides=(1, rows, rows * cols, rows * cols),
+        ),
+    }
+
+
+def _mul_mat_bf16_f32_contiguous(
+    *,
+    rows: int,
+    cols: int,
+    k: int,
+) -> dict[str, ConcreteTensor]:
+    return {
+        "src0": _tensor(
+            dtype="BF16",
+            sizes=(k, rows, 1, 1),
+            strides=(1, k, k * rows, k * rows),
+        ),
+        "src1": _tensor(
+            dtype="F32",
+            sizes=(k, cols, 1, 1),
+            strides=(1, k, k * cols, k * cols),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(rows, cols, 1, 1),
+            strides=(1, rows, rows * cols, rows * cols),
+        ),
+    }
+
+
 def _active_dataclass_fields(value: object) -> set[str]:
     """Return fields that are required or differ from their dataclass defaults."""
     active: set[str] = set()
@@ -514,6 +564,103 @@ MUL_MAT_F32_F32_LARGE_LLAMA_CASES = (
     _mul_mat_f32_f32_contiguous(rows=14336, cols=512, k=4096),
     _mul_mat_f32_f32_contiguous(rows=4096, cols=1, k=14336),
     _mul_mat_f32_f32_contiguous(rows=4096, cols=512, k=14336),
+)
+
+MUL_MAT_F16_F32_ROW_ONE_LLAMA_CASE = {
+    "src0": _tensor(
+        dtype="F16",
+        sizes=(256, 1, 1, 1),
+        strides=(1, 256, 256, 256),
+    ),
+    "src1": _tensor(
+        dtype="F32",
+        sizes=(256, 64, 1, 1),
+        strides=(1, 256, 16384, 16384),
+    ),
+    "dst": _tensor(dtype="F32", sizes=(1, 64, 1, 1), strides=(1, 1, 64, 64)),
+}
+
+MUL_MAT_F16_F32_PADDED_STORAGE_LLAMA_CASES = (
+    {
+        "src0": _tensor(
+            dtype="F16",
+            sizes=(1056, 128, 1, 1),
+            strides=(1, 2112, 270336, 270336),
+        ),
+        "src1": _tensor(
+            dtype="F32",
+            sizes=(1056, 1, 1, 1),
+            strides=(1, 2112, 2112, 2112),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(128, 1, 1, 1),
+            strides=(1, 128, 128, 128),
+        ),
+    },
+    {
+        "src0": _tensor(
+            dtype="F16",
+            sizes=(1057, 128, 1, 1),
+            strides=(1, 2113, 270464, 270464),
+        ),
+        "src1": _tensor(
+            dtype="F32",
+            sizes=(1057, 1, 1, 1),
+            strides=(1, 2113, 2113, 2113),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(128, 1, 1, 1),
+            strides=(1, 128, 128, 128),
+        ),
+    },
+    {
+        "src0": _tensor(
+            dtype="F16",
+            sizes=(1056, 129, 1, 1),
+            strides=(1, 2112, 272448, 272448),
+        ),
+        "src1": _tensor(
+            dtype="F32",
+            sizes=(1056, 1, 1, 1),
+            strides=(1, 2112, 2112, 2112),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(129, 1, 1, 1),
+            strides=(1, 129, 129, 129),
+        ),
+    },
+    {
+        "src0": _tensor(
+            dtype="F16",
+            sizes=(1057, 129, 1, 1),
+            strides=(1, 2113, 272577, 272577),
+        ),
+        "src1": _tensor(
+            dtype="F32",
+            sizes=(1057, 1, 1, 1),
+            strides=(1, 2113, 2113, 2113),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(129, 1, 1, 1),
+            strides=(1, 129, 129, 129),
+        ),
+    },
+)
+
+MUL_MAT_F32_F16_LLAMA_CASES = (
+    _mul_mat_f32_f16_contiguous(rows=16, cols=1, k=4),
+    _mul_mat_f32_f16_contiguous(rows=16, cols=1, k=256),
+    _mul_mat_f32_f16_contiguous(rows=32, cols=16, k=256),
+)
+
+MUL_MAT_BF16_F32_LLAMA_CASES = (
+    _mul_mat_bf16_f32_contiguous(rows=1, cols=64, k=256),
+    _mul_mat_bf16_f32_contiguous(rows=1056, cols=1, k=128),
+    _mul_mat_bf16_f32_contiguous(rows=1057, cols=32, k=129),
 )
 
 MUL_MAT_F32_F32_SKINNY_ALIGNED = _mul_mat_f32_f32_contiguous(
@@ -986,6 +1133,52 @@ def test_mul_mat_f16_f16_exact_gfx1100_specializations_precede_broad_contiguous_
         )
         == "mul_mat_f16_f16_contiguous_4d"
     )
+
+
+def test_mul_mat_f16_f32_residual_llama_cases_fall_back_to_generic_route(
+    real_v2_catalog: RouteCatalog,
+) -> None:
+    contiguous_route = real_v2_catalog.routes_by_id["mul_mat_f16_f32_contiguous_4d"]
+    generic_route = real_v2_catalog.routes_by_id["mul_mat_f16_f32_generic_4d"]
+
+    residual_cases = (
+        MUL_MAT_F16_F32_ROW_ONE_LLAMA_CASE,
+        *MUL_MAT_F16_F32_PADDED_STORAGE_LLAMA_CASES,
+    )
+
+    for tensors in residual_cases:
+        assert not route_accepts_tensors(contiguous_route, tensors)
+        assert route_accepts_tensors(generic_route, tensors)
+        assert (
+            _first_matching_route_id(real_v2_catalog, "MUL_MAT", tensors)
+            == "mul_mat_f16_f32_generic_4d"
+        )
+
+
+def test_mul_mat_f32_f16_llama_cases_use_generic_route(
+    real_v2_catalog: RouteCatalog,
+) -> None:
+    generic_route = real_v2_catalog.routes_by_id["mul_mat_f32_f16_generic_4d"]
+
+    for tensors in MUL_MAT_F32_F16_LLAMA_CASES:
+        assert route_accepts_tensors(generic_route, tensors)
+        assert (
+            _first_matching_route_id(real_v2_catalog, "MUL_MAT", tensors)
+            == "mul_mat_f32_f16_generic_4d"
+        )
+
+
+def test_mul_mat_bf16_f32_llama_cases_use_generic_route(
+    real_v2_catalog: RouteCatalog,
+) -> None:
+    generic_route = real_v2_catalog.routes_by_id["mul_mat_bf16_f32_generic_4d"]
+
+    for tensors in MUL_MAT_BF16_F32_LLAMA_CASES:
+        assert route_accepts_tensors(generic_route, tensors)
+        assert (
+            _first_matching_route_id(real_v2_catalog, "MUL_MAT", tensors)
+            == "mul_mat_bf16_f32_generic_4d"
+        )
 
 
 def test_mul_mat_f32_f32_large_llama_cases_fall_back_to_generic_route(

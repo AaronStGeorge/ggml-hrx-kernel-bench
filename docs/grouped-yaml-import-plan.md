@@ -16,7 +16,12 @@ custom Python mapping registries or op-specific route-resolution code.
   `tests/infra/generate_loom_descriptor_tests_cmake.py`
 - Descriptor execution runner:
   `tests/infra/run_loom_execution_descriptors.py`
-- Llama.cpp input: `tests/kernels/data/llamacpp_test.v2.yaml`
+- Llama.cpp core input:
+  `tests/kernels/data/llamacpp_core.v2.yaml`
+- Llama.cpp unsharded source snapshot:
+  `tests/kernels/data/llamacpp_full_unsharded_source.v2.yaml`
+- Llama.cpp `MUL_MAT` shards:
+  `tests/kernels/data/llamacpp/mul_mat/`
 - Model input: `tests/models/data/Llama-3.3-8B-Instruct.Q8_0.v2.yaml`
 - Llama.cpp expected coverage:
   `tests/kernels/data/llamacpp.import-coverage.json`
