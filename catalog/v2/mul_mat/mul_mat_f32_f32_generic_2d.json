@@ -100,13 +100,13 @@
       "name": "src0_dimensions",
       "index": 0,
       "min": 1,
-      "max": 8192
+      "max": 16384
     },
     {
       "name": "src0_dimensions",
       "index": 1,
       "min": 1,
-      "max": 8192
+      "max": 131072
     },
     {
       "name": "src1_dimensions",
@@ -118,7 +118,7 @@
       "name": "dst_dimensions",
       "index": 0,
       "min": 1,
-      "max": 8192
+      "max": 131072
     },
     {
       "name": "dst_dimensions",

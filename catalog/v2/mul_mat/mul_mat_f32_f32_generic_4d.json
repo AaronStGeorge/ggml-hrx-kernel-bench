@@ -120,12 +120,12 @@
     {
       "name": "k",
       "min": 1,
-      "max": 8192
+      "max": 16384
     },
     {
       "name": "dst_rows",
       "min": 1,
-      "max": 8192
+      "max": 131072
     },
     {
       "name": "dst_cols",

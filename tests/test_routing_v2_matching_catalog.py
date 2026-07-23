@@ -142,6 +142,31 @@ def _mul_mat_f16_f16_contiguous(
     }
 
 
+def _mul_mat_f32_f32_contiguous(
+    *,
+    rows: int,
+    cols: int,
+    k: int,
+) -> dict[str, ConcreteTensor]:
+    return {
+        "src0": _tensor(
+            dtype="F32",
+            sizes=(k, rows, 1, 1),
+            strides=(1, k, k * rows, k * rows),
+        ),
+        "src1": _tensor(
+            dtype="F32",
+            sizes=(k, cols, 1, 1),
+            strides=(1, k, k * cols, k * cols),
+        ),
+        "dst": _tensor(
+            dtype="F32",
+            sizes=(rows, cols, 1, 1),
+            strides=(1, rows, rows * cols, rows * cols),
+        ),
+    }
+
+
 def _active_dataclass_fields(value: object) -> set[str]:
     """Return fields that are required or differ from their dataclass defaults."""
     active: set[str] = set()
@@ -480,6 +505,36 @@ MUL_MAT_F16_F16_N1_LLAMA_CASES = (
     _mul_mat_f16_f16_contiguous(rows=14336, cols=1, k=4096),
     _mul_mat_f16_f16_contiguous(rows=4096, cols=1, k=14336),
     _mul_mat_f16_f16_contiguous(rows=4096, cols=1, k=4096),
+)
+
+MUL_MAT_F32_F32_LARGE_LLAMA_CASES = (
+    _mul_mat_f32_f32_contiguous(rows=128256, cols=1, k=4096),
+    _mul_mat_f32_f32_contiguous(rows=128256, cols=512, k=4096),
+    _mul_mat_f32_f32_contiguous(rows=14336, cols=1, k=4096),
+    _mul_mat_f32_f32_contiguous(rows=14336, cols=512, k=4096),
+    _mul_mat_f32_f32_contiguous(rows=4096, cols=1, k=14336),
+    _mul_mat_f32_f32_contiguous(rows=4096, cols=512, k=14336),
+)
+
+MUL_MAT_F32_F32_SKINNY_ALIGNED = _mul_mat_f32_f32_contiguous(
+    rows=4096,
+    cols=1,
+    k=4096,
+)
+MUL_MAT_F32_F32_SKINNY_K_TAIL = _mul_mat_f32_f32_contiguous(
+    rows=1057,
+    cols=1,
+    k=129,
+)
+MUL_MAT_F32_F32_LARGE_ALIGNED = _mul_mat_f32_f32_contiguous(
+    rows=4096,
+    cols=512,
+    k=4096,
+)
+MUL_MAT_F32_F32_LARGE_K_TAIL = _mul_mat_f32_f32_contiguous(
+    rows=4096,
+    cols=512,
+    k=4097,
 )
 
 MUL_MAT_F16_F16_R4096_C448_K14336 = _mul_mat_f16_f16_contiguous(
@@ -931,6 +986,75 @@ def test_mul_mat_f16_f16_exact_gfx1100_specializations_precede_broad_contiguous_
         )
         == "mul_mat_f16_f16_contiguous_4d"
     )
+
+
+def test_mul_mat_f32_f32_large_llama_cases_fall_back_to_generic_route(
+    real_v2_catalog: RouteCatalog,
+) -> None:
+    route_ids = [route.id for route in routes_for_op(real_v2_catalog, "MUL_MAT")]
+
+    skinny_index = route_ids.index("mul_mat_f32_f32_skinny_4d")
+    large_tiled_index = route_ids.index("mul_mat_f32_f32_large_tiled_4d")
+    contiguous_index = route_ids.index("mul_mat_f32_f32_contiguous_4d")
+    generic_index = route_ids.index("mul_mat_f32_f32_generic_4d")
+    skinny_route = real_v2_catalog.routes_by_id["mul_mat_f32_f32_skinny_4d"]
+    large_tiled_route = real_v2_catalog.routes_by_id["mul_mat_f32_f32_large_tiled_4d"]
+    contiguous_route = real_v2_catalog.routes_by_id["mul_mat_f32_f32_contiguous_4d"]
+    generic_route = real_v2_catalog.routes_by_id["mul_mat_f32_f32_generic_4d"]
+
+    assert skinny_index < large_tiled_index < contiguous_index < generic_index
+
+    assert route_accepts_tensors(skinny_route, MUL_MAT_F32_F32_SKINNY_ALIGNED)
+    assert route_accepts_tensors(skinny_route, MUL_MAT_F32_F32_SKINNY_K_TAIL)
+    assert not route_accepts_tensors(
+        large_tiled_route,
+        MUL_MAT_F32_F32_SKINNY_ALIGNED,
+    )
+    assert (
+        _first_matching_route_id(
+            real_v2_catalog,
+            "MUL_MAT",
+            MUL_MAT_F32_F32_SKINNY_ALIGNED,
+        )
+        == "mul_mat_f32_f32_skinny_4d"
+    )
+    assert (
+        _first_matching_route_id(
+            real_v2_catalog,
+            "MUL_MAT",
+            MUL_MAT_F32_F32_SKINNY_K_TAIL,
+        )
+        == "mul_mat_f32_f32_skinny_4d"
+    )
+
+    assert route_accepts_tensors(large_tiled_route, MUL_MAT_F32_F32_LARGE_ALIGNED)
+    assert route_accepts_tensors(large_tiled_route, MUL_MAT_F32_F32_LARGE_K_TAIL)
+    assert not route_accepts_tensors(skinny_route, MUL_MAT_F32_F32_LARGE_ALIGNED)
+    assert (
+        _first_matching_route_id(
+            real_v2_catalog,
+            "MUL_MAT",
+            MUL_MAT_F32_F32_LARGE_ALIGNED,
+        )
+        == "mul_mat_f32_f32_large_tiled_4d"
+    )
+    assert (
+        _first_matching_route_id(
+            real_v2_catalog,
+            "MUL_MAT",
+            MUL_MAT_F32_F32_LARGE_K_TAIL,
+        )
+        == "mul_mat_f32_f32_large_tiled_4d"
+    )
+
+    for tensors in MUL_MAT_F32_F32_LARGE_LLAMA_CASES:
+        assert not route_accepts_tensors(skinny_route, tensors)
+        assert not route_accepts_tensors(large_tiled_route, tensors)
+        assert not route_accepts_tensors(contiguous_route, tensors)
+        assert route_accepts_tensors(generic_route, tensors)
+        assert _first_matching_route_id(real_v2_catalog, "MUL_MAT", tensors) == (
+            "mul_mat_f32_f32_generic_4d"
+        )
     assert (
         _first_matching_route_id(
             real_v2_catalog,

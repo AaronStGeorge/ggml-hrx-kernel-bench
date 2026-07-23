@@ -44,6 +44,8 @@
       "mul_mat/mul_mat_q6_k_f32_contiguous_2d.json",
       "mul_mat/mul_mat_q6_k_f32_contiguous_4d.json",
       "mul_mat/mul_mat_f32_f32_contiguous_2d.json",
+      "mul_mat/mul_mat_f32_f32_skinny_4d.json",
+      "mul_mat/mul_mat_f32_f32_large_tiled_4d.json",
       "mul_mat/mul_mat_f32_f32_contiguous_4d.json",
       "mul_mat/mul_mat_f32_f32_generic_2d.json",
       "mul_mat/mul_mat_f32_f32_generic_4d.json",
