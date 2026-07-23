@@ -11,10 +11,17 @@ from .routing.api import Candidate
 
 
 QK_K = 256
+Q2_K_BLOCK_BYTES = 84
+Q3_K_BLOCK_BYTES = 110
+Q4_0_BLOCK_BYTES = 18
+Q4_1_BLOCK_BYTES = 20
 Q4_K_BLOCK_BYTES = 144
+Q5_0_BLOCK_BYTES = 22
+Q5_1_BLOCK_BYTES = 24
 Q5_K_BLOCK_BYTES = 176
 Q6_K_BLOCK_BYTES = 210
 Q8_0_BLOCK_BYTES = 34
+F16_BYTES = 2
 F32_BYTES = 4
 I32_BYTES = 4
 Q8_1_BLOCK_BYTES = 36
@@ -62,6 +69,42 @@ def q4_k_bytes(k: int, rows: int) -> int:
     if k % QK_K != 0:
         raise ValueError(f"k must be a multiple of {QK_K}: {k}")
     return rows * (k // QK_K) * Q4_K_BLOCK_BYTES
+
+
+def q2_k_bytes(k: int, rows: int) -> int:
+    if k % QK_K != 0:
+        raise ValueError(f"k must be a multiple of {QK_K}: {k}")
+    return rows * (k // QK_K) * Q2_K_BLOCK_BYTES
+
+
+def q3_k_bytes(k: int, rows: int) -> int:
+    if k % QK_K != 0:
+        raise ValueError(f"k must be a multiple of {QK_K}: {k}")
+    return rows * (k // QK_K) * Q3_K_BLOCK_BYTES
+
+
+def q4_0_bytes(k: int, rows: int) -> int:
+    if k % 32 != 0:
+        raise ValueError(f"k must be a multiple of 32: {k}")
+    return rows * (k // 32) * Q4_0_BLOCK_BYTES
+
+
+def q4_1_bytes(k: int, rows: int) -> int:
+    if k % 32 != 0:
+        raise ValueError(f"k must be a multiple of 32: {k}")
+    return rows * (k // 32) * Q4_1_BLOCK_BYTES
+
+
+def q5_0_bytes(k: int, rows: int) -> int:
+    if k % 32 != 0:
+        raise ValueError(f"k must be a multiple of 32: {k}")
+    return rows * (k // 32) * Q5_0_BLOCK_BYTES
+
+
+def q5_1_bytes(k: int, rows: int) -> int:
+    if k % 32 != 0:
+        raise ValueError(f"k must be a multiple of 32: {k}")
+    return rows * (k // 32) * Q5_1_BLOCK_BYTES
 
 
 def q5_k_bytes(k: int, rows: int) -> int:
@@ -132,6 +175,12 @@ def pack_q5_k_high_bits(np: Any, quants: Any):
     return np.sum(high * weights, axis=-2, dtype=np.uint8).astype(np.uint8)
 
 
+def pack_q5_legacy_high_bits(np: Any, quants: Any):
+    high = ((quants.astype(np.uint8) & np.uint8(0x10)) >> np.uint8(4)).reshape(quants.shape[:-1] + (4, 8))
+    weights = np.uint16(1) << np.arange(8, dtype=np.uint16)
+    return np.sum(high.astype(np.uint16) * weights, axis=-1, dtype=np.uint16).astype(np.uint8)
+
+
 def _permuted_rows(np: Any, rng: Any, base: Any, shape: tuple[int, ...]) -> Any:
     order = np.argsort(rng.random(shape + (base.size,)), axis=-1)
     return base[order].astype(base.dtype)
@@ -166,6 +215,140 @@ def q4_k_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0
     data[:, 2:4] = d_bytes
     data[:, 4:16] = pack_q4_k_scales(np, scales, minimums)
     data[:, 16:144] = qs
+    return data.reshape(-1)
+
+
+def q4_0_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0.5):
+    blocks = rows * (k // 32)
+    data = np.zeros((blocks, Q4_0_BLOCK_BYTES), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    q_base = np.tile(np.arange(16, dtype=np.uint8), 2)
+    q_values = _permuted_rows(np, rng, q_base, (blocks,))
+    centered = q_values.astype(np.float32) - np.float32(8.0)
+    rms = np.sqrt(np.mean(centered**np.float32(2.0), axis=1, dtype=np.float32)).astype(np.float32)
+    d_value = np.where(rms > np.float32(0.0), np.float32(target_rms) / rms, np.float32(1.0)).astype(np.float16)
+    data[:, 0:2] = d_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 2:18] = (q_values[:, 0::2] | (q_values[:, 1::2] << np.uint8(4))).astype(np.uint8)
+    return data.reshape(-1)
+
+
+def q4_1_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0.5):
+    blocks = rows * (k // 32)
+    data = np.zeros((blocks, Q4_1_BLOCK_BYTES), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    q_base = np.tile(np.arange(16, dtype=np.uint8), 2)
+    q_values = _permuted_rows(np, rng, q_base, (blocks,))
+    centered = q_values.astype(np.float32) - np.float32(7.5)
+    rms = np.sqrt(np.mean(centered**np.float32(2.0), axis=1, dtype=np.float32)).astype(np.float32)
+    d_value_f32 = np.where(rms > np.float32(0.0), np.float32(target_rms) / rms, np.float32(1.0)).astype(np.float32)
+    d_value = d_value_f32.astype(np.float16)
+    m_value = (-d_value_f32 * np.float32(7.5)).astype(np.float16)
+    data[:, 0:2] = d_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 2:4] = m_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 4:20] = (q_values[:, 0::2] | (q_values[:, 1::2] << np.uint8(4))).astype(np.uint8)
+    return data.reshape(-1)
+
+
+def q2_k_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0.5):
+    blocks = rows * (k // QK_K)
+    data = np.zeros((blocks, Q2_K_BLOCK_BYTES), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    q_base = np.tile(np.arange(4, dtype=np.uint8), 4)
+    scales = rng.integers(2, 7, size=(blocks, 16), dtype=np.uint8)
+    minimums = np.floor(scales.astype(np.float32) * np.float32(1.5) + np.float32(0.5)).astype(np.uint8)
+    q_values = _permuted_rows(np, rng, q_base, (blocks, 16))
+    logical = scales.astype(np.float32)[..., None] * q_values.astype(np.float32) - minimums.astype(np.float32)[..., None]
+    rms = np.sqrt(np.mean(logical.reshape(blocks, QK_K) ** np.float32(2.0), axis=1, dtype=np.float32)).astype(np.float32)
+    d_value = np.where(rms > np.float32(0.0), np.float32(target_rms) / rms, np.float32(1.0)).astype(np.float16)
+    qs = np.zeros((blocks, 64), dtype=np.uint8)
+    for group in range(16):
+        half = group // 8
+        pair = (group % 8) // 2
+        q_offset = half * 32 + (group % 2) * 16
+        qs[:, q_offset : q_offset + 16] |= (q_values[:, group] & np.uint8(0x03)) << np.uint8(2 * pair)
+    data[:, 0:16] = ((scales & np.uint8(0x0F)) | (minimums << np.uint8(4))).astype(np.uint8)
+    data[:, 16:80] = qs
+    data[:, 80:82] = d_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 82:84] = d_value.reshape(blocks, 1).view(np.uint8)
+    return data.reshape(-1)
+
+
+def pack_q3_k_scales(np: Any, scales: Any):
+    packed = np.zeros(scales.shape[:-1] + (12,), dtype=np.uint8)
+    scale_u = scales.astype(np.uint8)
+    packed[..., 0:4] = ((scale_u[..., 0:4] & np.uint8(0x0F)) | ((scale_u[..., 8:12] & np.uint8(0x0F)) << np.uint8(4))).astype(np.uint8)
+    packed[..., 4:8] = ((scale_u[..., 4:8] & np.uint8(0x0F)) | ((scale_u[..., 12:16] & np.uint8(0x0F)) << np.uint8(4))).astype(np.uint8)
+    packed[..., 8:12] = (
+        ((scale_u[..., 0:4] >> np.uint8(4)) & np.uint8(0x03))
+        | (((scale_u[..., 4:8] >> np.uint8(4)) & np.uint8(0x03)) << np.uint8(2))
+        | (((scale_u[..., 8:12] >> np.uint8(4)) & np.uint8(0x03)) << np.uint8(4))
+        | (((scale_u[..., 12:16] >> np.uint8(4)) & np.uint8(0x03)) << np.uint8(6))
+    ).astype(np.uint8)
+    return packed
+
+
+def q3_k_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0.5):
+    blocks = rows * (k // QK_K)
+    data = np.zeros((blocks, Q3_K_BLOCK_BYTES), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    q_base = np.tile(np.arange(-4, 4, dtype=np.int8), 2)
+    scale_signed = rng.integers(1, 5, size=(blocks, 16), dtype=np.int8)
+    scales = (scale_signed + np.int8(32)).astype(np.uint8)
+    q_signed = _permuted_rows(np, rng, q_base, (blocks, 16)).astype(np.int8)
+    logical = scale_signed.astype(np.float32)[..., None] * q_signed.astype(np.float32)
+    rms = np.sqrt(np.mean(logical.reshape(blocks, QK_K) ** np.float32(2.0), axis=1, dtype=np.float32)).astype(np.float32)
+    d_value = np.where(rms > np.float32(0.0), np.float32(target_rms) / rms, np.float32(1.0)).astype(np.float16)
+    qs = np.zeros((blocks, 64), dtype=np.uint8)
+    hmask = np.zeros((blocks, 32), dtype=np.uint8)
+    for group in range(16):
+        half = group // 8
+        pair = (group % 8) // 2
+        q_offset = half * 32 + (group % 2) * 16
+        values = q_signed[:, group]
+        q_low = np.where(values >= 0, values, values + np.int8(4)).astype(np.uint8)
+        qs[:, q_offset : q_offset + 16] |= (q_low & np.uint8(0x03)) << np.uint8(2 * pair)
+        high_bit = (values >= 0).astype(np.uint8) << np.uint8(group // 2)
+        hmask_offset = (group % 2) * 16
+        hmask[:, hmask_offset : hmask_offset + 16] |= high_bit
+    data[:, 0:32] = hmask
+    data[:, 32:96] = qs
+    data[:, 96:108] = pack_q3_k_scales(np, scales)
+    data[:, 108:110] = d_value.reshape(blocks, 1).view(np.uint8)
+    return data.reshape(-1)
+
+
+def q5_0_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0.5):
+    blocks = rows * (k // 32)
+    data = np.zeros((blocks, Q5_0_BLOCK_BYTES), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    q_base = np.arange(32, dtype=np.uint8)
+    q_values = _permuted_rows(np, rng, q_base, (blocks,))
+    centered = q_values.astype(np.float32) - np.float32(16.0)
+    rms = np.sqrt(np.mean(centered**np.float32(2.0), axis=1, dtype=np.float32)).astype(np.float32)
+    d_value = np.where(rms > np.float32(0.0), np.float32(target_rms) / rms, np.float32(1.0)).astype(np.float16)
+    data[:, 0:2] = d_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 2:6] = pack_q5_legacy_high_bits(np, q_values)
+    q_low = q_values & np.uint8(0x0F)
+    data[:, 6:22] = (q_low[:, 0::2] | (q_low[:, 1::2] << np.uint8(4))).astype(np.uint8)
+    return data.reshape(-1)
+
+
+def q5_1_pattern(np: Any, k: int, rows: int, *, seed: int, target_rms: float = 0.5):
+    blocks = rows * (k // 32)
+    data = np.zeros((blocks, Q5_1_BLOCK_BYTES), dtype=np.uint8)
+    rng = np.random.default_rng(seed)
+    q_base = np.arange(32, dtype=np.uint8)
+    q_values = _permuted_rows(np, rng, q_base, (blocks,))
+    centered = q_values.astype(np.float32) - np.float32(15.5)
+    rms = np.sqrt(np.mean(centered**np.float32(2.0), axis=1, dtype=np.float32)).astype(np.float32)
+    d_value_f32 = np.where(rms > np.float32(0.0), np.float32(target_rms) / rms, np.float32(1.0)).astype(np.float32)
+    d_value = d_value_f32.astype(np.float16)
+    m_value = (-d_value_f32 * np.float32(15.5)).astype(np.float16)
+    data[:, 0:2] = d_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 2:4] = m_value.reshape(blocks, 1).view(np.uint8)
+    data[:, 4:8] = pack_q5_legacy_high_bits(np, q_values)
+    q_low = q_values & np.uint8(0x0F)
+    data[:, 8:24] = (q_low[:, 0::2] | (q_low[:, 1::2] << np.uint8(4))).astype(np.uint8)
     return data.reshape(-1)
 
 
@@ -248,6 +431,111 @@ def dequant_q4_k(np: Any, packed: Any, k: int, rows: int):
     q[..., 1::2, :] = (qs >> 4).astype(np.float32)
     values = d[..., None, None] * scale_i[..., None] * q - dmin[..., None, None] * min_i[..., None]
     return values.astype(np.float32).reshape(rows, k)
+
+
+def dequant_q2_k(np: Any, packed: Any, k: int, rows: int):
+    blocks_per_row = k // QK_K
+    blocks = packed.view(np.uint8).reshape(rows, blocks_per_row, Q2_K_BLOCK_BYTES)
+    packed_scales = blocks[..., 0:16].astype(np.uint32)
+    scale_i = (packed_scales & 0x0F).astype(np.float32)
+    min_i = (packed_scales >> 4).astype(np.float32)
+    d = blocks[..., 80:82].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    dmin = blocks[..., 82:84].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    qs = blocks[..., 16:80].astype(np.uint32)
+    q = np.empty((rows, blocks_per_row, 16, 16), dtype=np.float32)
+    for group in range(16):
+        half = group // 8
+        pair = (group % 8) // 2
+        q_offset = half * 32 + (group % 2) * 16
+        values = (qs[..., q_offset : q_offset + 16] >> (2 * pair)) & 0x03
+        q[..., group, :] = values.astype(np.float32)
+    values = d[..., None, None] * scale_i[..., None] * q - dmin[..., None, None] * min_i[..., None]
+    return values.astype(np.float32).reshape(rows, k)
+
+
+def _unpack_q3_k_scales(np: Any, packed_scales: Any):
+    low0 = packed_scales[..., 0:4]
+    low1 = packed_scales[..., 4:8]
+    high = packed_scales[..., 8:12]
+    scales = np.empty(packed_scales.shape[:-1] + (16,), dtype=np.uint32)
+    scales[..., 0:4] = (low0 & 0x0F) | ((high & 0x03) << 4)
+    scales[..., 4:8] = (low1 & 0x0F) | (((high >> 2) & 0x03) << 4)
+    scales[..., 8:12] = ((low0 >> 4) & 0x0F) | (((high >> 4) & 0x03) << 4)
+    scales[..., 12:16] = ((low1 >> 4) & 0x0F) | (((high >> 6) & 0x03) << 4)
+    return scales
+
+
+def dequant_q3_k(np: Any, packed: Any, k: int, rows: int):
+    blocks_per_row = k // QK_K
+    blocks = packed.view(np.uint8).reshape(rows, blocks_per_row, Q3_K_BLOCK_BYTES)
+    hmask = blocks[..., 0:32].astype(np.uint32)
+    qs = blocks[..., 32:96].astype(np.uint32)
+    packed_scales = blocks[..., 96:108].astype(np.uint32)
+    scale_i = _unpack_q3_k_scales(np, packed_scales).astype(np.int32) - 32
+    d = blocks[..., 108:110].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    q = np.empty((rows, blocks_per_row, 16, 16), dtype=np.float32)
+    for group in range(16):
+        half = group // 8
+        pair = (group % 8) // 2
+        q_offset = half * 32 + (group % 2) * 16
+        low = ((qs[..., q_offset : q_offset + 16] >> (2 * pair)) & 0x03).astype(np.int32)
+        hmask_offset = (group % 2) * 16
+        high = (hmask[..., hmask_offset : hmask_offset + 16] & (1 << (group // 2))) != 0
+        q[..., group, :] = np.where(high, low, low - 4).astype(np.float32)
+    values = d[..., None, None] * scale_i.astype(np.float32)[..., None] * q
+    return values.astype(np.float32).reshape(rows, k)
+
+
+def dequant_q4_0(np: Any, packed: Any, k: int, rows: int):
+    blocks_per_row = k // 32
+    blocks = packed.view(np.uint8).reshape(rows, blocks_per_row, Q4_0_BLOCK_BYTES)
+    d = blocks[..., 0:2].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    qs = blocks[..., 2:18].astype(np.uint32)
+    q = np.empty((rows, blocks_per_row, 32), dtype=np.float32)
+    q[..., 0::2] = (qs & 0x0F).astype(np.float32)
+    q[..., 1::2] = (qs >> 4).astype(np.float32)
+    return (d[..., None] * (q - np.float32(8.0))).astype(np.float32).reshape(rows, k)
+
+
+def dequant_q4_1(np: Any, packed: Any, k: int, rows: int):
+    blocks_per_row = k // 32
+    blocks = packed.view(np.uint8).reshape(rows, blocks_per_row, Q4_1_BLOCK_BYTES)
+    d = blocks[..., 0:2].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    m = blocks[..., 2:4].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    qs = blocks[..., 4:20].astype(np.uint32)
+    q = np.empty((rows, blocks_per_row, 32), dtype=np.float32)
+    q[..., 0::2] = (qs & 0x0F).astype(np.float32)
+    q[..., 1::2] = (qs >> 4).astype(np.float32)
+    return (d[..., None] * q + m[..., None]).astype(np.float32).reshape(rows, k)
+
+
+def dequant_q5_0(np: Any, packed: Any, k: int, rows: int):
+    blocks_per_row = k // 32
+    blocks = packed.view(np.uint8).reshape(rows, blocks_per_row, Q5_0_BLOCK_BYTES)
+    d = blocks[..., 0:2].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    qh = blocks[..., 2:6].astype(np.uint32)
+    qs = blocks[..., 6:22].astype(np.uint32)
+    q = np.empty((rows, blocks_per_row, 32), dtype=np.float32)
+    q[..., 0::2] = (qs & 0x0F).astype(np.float32)
+    q[..., 1::2] = (qs >> 4).astype(np.float32)
+    shifts = np.arange(8, dtype=np.uint32)
+    q += (((qh[..., :, None] >> shifts) & 0x01).reshape(rows, blocks_per_row, 32) << 4).astype(np.float32)
+    return (d[..., None] * (q - np.float32(16.0))).astype(np.float32).reshape(rows, k)
+
+
+def dequant_q5_1(np: Any, packed: Any, k: int, rows: int):
+    blocks_per_row = k // 32
+    blocks = packed.view(np.uint8).reshape(rows, blocks_per_row, Q5_1_BLOCK_BYTES)
+    d = blocks[..., 0:2].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    m = blocks[..., 2:4].copy().view(np.float16).astype(np.float32).reshape(rows, blocks_per_row)
+    qh = blocks[..., 4:8].astype(np.uint32)
+    qs = blocks[..., 8:24].astype(np.uint32)
+    q = np.empty((rows, blocks_per_row, 32), dtype=np.float32)
+    q[..., 0::2] = (qs & 0x0F).astype(np.float32)
+    q[..., 1::2] = (qs >> 4).astype(np.float32)
+    shifts = np.arange(8, dtype=np.uint32)
+    q += (((qh[..., :, None] >> shifts) & 0x01).reshape(rows, blocks_per_row, 32) << 4).astype(np.float32)
+    return (d[..., None] * q + m[..., None]).astype(np.float32).reshape(rows, k)
 
 
 def dequant_q5_k(np: Any, packed: Any, k: int, rows: int):
@@ -370,6 +658,16 @@ def _mul_mat_q4_k_f32(np: Any, candidate: Candidate, fixture_dir: Path, seed: in
             "split_k_reduce2_f32_numpy_logical",
             {"atol": 1e-5, "rtol": 1e-5},
             _split_k_reduce2_arrays,
+        )
+        return _logical_oracle(spec, np, candidate, fixture_dir, seed)
+    if candidate.source_id in {"mul_mat_q4_k_f32_generic", "mul_mat_q4_k_f16_generic"}:
+        src1_dtype = "f16" if candidate.source_id == "mul_mat_q4_k_f16_generic" else "f32"
+        spec = LogicalOracleSpec(
+            ("mul_mat_q4_k_f32",),
+            f"mul_mat_q4_k_{src1_dtype}_generic_numpy_dequant_matmul",
+            {"atol": 0.08, "rtol": 0.02},
+            lambda np, candidate, seed: _mul_mat_q4_k_generic_arrays(np, candidate, seed, src1_dtype=src1_dtype),
+            exact_kernel_abi=True,
         )
         return _logical_oracle(spec, np, candidate, fixture_dir, seed)
     k = int(candidate.shape.get("k", 256))
@@ -2043,9 +2341,7 @@ def _matmul_f32_kernel_abi_arrays(np: Any, candidate: Candidate, seed: int) -> d
         for i02 in range(src0_dims[2]):
             lhs = f32_pattern(np, (rows, k), seed=seed + i02 + src0_dims[2] * i03)
             lhs_by_slice[(i02, i03)] = lhs
-            for row in range(rows):
-                src0_row_base = row * src0_strides[1] + i02 * src0_strides[2] + i03 * src0_strides[3]
-                src0[src0_row_base : src0_row_base + k] = lhs[row]
+            _store_mul_mat_dense_src0_slice(np, src0, lhs, k=k, rows=rows, strides=src0_strides, i2=i02, i3=i03)
     src0_scale2 = dst_dims[2] // src0_dims[2]
     src0_scale3 = dst_dims[3] // src0_dims[3]
     for i3 in range(dst_dims[3]):
@@ -2055,11 +2351,20 @@ def _matmul_f32_kernel_abi_arrays(np: Any, candidate: Candidate, seed: int) -> d
             lhs = lhs_by_slice[(src0_i2, src0_i3)]
             rhs = f32_pattern(np, (cols, k), seed=seed + 1 + i2 + dst_dims[2] * i3)
             dot = np.matmul(lhs.astype(np.float32), rhs.T.astype(np.float32)).T.astype(np.float32)
-            for col in range(cols):
-                src1_col_base = col * src1_strides[1] + i2 * src1_strides[2] + i3 * src1_strides[3]
-                src1[src1_col_base : src1_col_base + k] = rhs[col]
-                dst_col_base = col * dst_strides[1] + i2 * dst_strides[2] + i3 * dst_strides[3]
-                expected[dst_col_base : dst_col_base + rows] = dot[col]
+            _store_mul_mat_dense_rhs_and_dst_slice(
+                np,
+                src1,
+                expected,
+                rhs,
+                dot,
+                k=k,
+                rows=rows,
+                cols=cols,
+                src1_strides=src1_strides,
+                dst_strides=dst_strides,
+                i2=i2,
+                i3=i3,
+            )
     return {
         "arrays": {
             "src0": src0,
@@ -2094,9 +2399,7 @@ def _matmul_f16_rhs_arrays(np: Any, candidate: Candidate, seed: int, *, src1_dty
             for i02 in range(src0_dims[2]):
                 lhs = f16_pattern(np, (rows, k), seed=seed + i02 + src0_dims[2] * i03)
                 lhs_by_slice[(i02, i03)] = lhs
-                for row in range(rows):
-                    src0_row_base = row * src0_strides[1] + i02 * src0_strides[2] + i03 * src0_strides[3]
-                    src0[src0_row_base : src0_row_base + k] = lhs[row]
+                _store_mul_mat_dense_src0_slice(np, src0, lhs, k=k, rows=rows, strides=src0_strides, i2=i02, i3=i03)
         src0_scale2 = dst_dims[2] // src0_dims[2]
         src0_scale3 = dst_dims[3] // src0_dims[3]
         for i3 in range(dst_dims[3]):
@@ -2106,11 +2409,20 @@ def _matmul_f16_rhs_arrays(np: Any, candidate: Candidate, seed: int, *, src1_dty
                 lhs = lhs_by_slice[(src0_i2, src0_i3)]
                 rhs = src1_pattern(np, (cols, k), seed=seed + 1 + i2 + dst_dims[2] * i3)
                 dot = np.matmul(lhs.astype(np.float32), rhs.T.astype(np.float32)).T.astype(np.float32)
-                for col in range(cols):
-                    src1_col_base = col * src1_strides[1] + i2 * src1_strides[2] + i3 * src1_strides[3]
-                    src1[src1_col_base : src1_col_base + k] = rhs[col]
-                    dst_col_base = col * dst_strides[1] + i2 * dst_strides[2] + i3 * dst_strides[3]
-                    expected[dst_col_base : dst_col_base + rows] = dot[col]
+                _store_mul_mat_dense_rhs_and_dst_slice(
+                    np,
+                    src1,
+                    expected,
+                    rhs,
+                    dot,
+                    k=k,
+                    rows=rows,
+                    cols=cols,
+                    src1_strides=src1_strides,
+                    dst_strides=dst_strides,
+                    i2=i2,
+                    i3=i3,
+                )
         return {
             "arrays": {
                 "src0": _f16_bits(np, src0),
@@ -2238,6 +2550,9 @@ def _mul_mat_q8_0_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, 
         data["metadata"]["message"] = "q8_0 matmul with q8_1 RHS requires q8_1 RHS ABI packer"
         data["metadata"]["logical_packed_weight_fixture"] = True
         return data
+    if candidate.source_id in {"mul_mat_q8_0_f32_generic", "mul_mat_q8_0_f16_generic"}:
+        src1_dtype = "f16" if candidate.source_id == "mul_mat_q8_0_f16_generic" else "f32"
+        return _mul_mat_q8_0_generic_arrays(np, candidate, seed, src1_dtype=src1_dtype)
     k, rows, cols = _matmul_dims(candidate)
     lhs_f32 = f32_pattern(np, (rows, k), seed=seed)
     src0 = quantize_q8_0(np, lhs_f32)
@@ -2256,6 +2571,475 @@ def _mul_mat_q8_0_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, 
             "bytes": {"src0": q8_0_bytes(k, rows), "src1": k * cols * F32_BYTES, "dst": rows * cols * F32_BYTES},
         },
     }
+
+
+def _packed_src0_buffer_layout(
+    candidate: Candidate,
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], int, int, int]:
+    src0_dims = _captured_tensor_dims(candidate, "src0")
+    if src0_dims is None:
+        raise ValueError("packed generic matmul oracle requires encoded src0 tensor dimensions")
+    src0_strides = _copy_tensor_strides(candidate, "src0", src0_dims)
+    k = int(src0_dims[0])
+    rows = int(src0_dims[1])
+    logical_count = _buffer_length(src0_dims, src0_strides)
+    return src0_dims, src0_strides, k, rows, logical_count
+
+
+def _packed_matmul_dense_rhs_layout(
+    candidate: Candidate,
+) -> tuple[
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+]:
+    src1_dims = _captured_tensor_dims(candidate, "src1")
+    dst_dims = _captured_tensor_dims(candidate, "dst")
+    if src1_dims is None or dst_dims is None:
+        raise ValueError("packed generic matmul oracle requires encoded src1 and dst tensor dimensions")
+    return src1_dims, dst_dims, _copy_tensor_strides(candidate, "src1", src1_dims), _copy_tensor_strides(candidate, "dst", dst_dims)
+
+
+def _store_mul_mat_dense_src0_slice(
+    np: Any,
+    dst: Any,
+    lhs: Any,
+    *,
+    k: int,
+    rows: int,
+    strides: tuple[int, int, int, int],
+    i2: int,
+    i3: int,
+) -> None:
+    row_offsets = np.arange(rows, dtype=np.intp) * np.intp(strides[1])
+    slice_base = np.intp(i2 * strides[2] + i3 * strides[3])
+    indices = slice_base + row_offsets[:, None] + np.arange(k, dtype=np.intp)
+    dst[indices] = lhs
+
+
+def _store_mul_mat_packed_src0_slice(
+    np: Any,
+    dst: Any,
+    packed: Any,
+    *,
+    qk: int,
+    block_bytes: int,
+    row_bytes: int,
+    rows: int,
+    strides: tuple[int, int, int, int],
+    i2: int,
+    i3: int,
+) -> None:
+    row_offsets = np.arange(rows, dtype=np.intp) * np.intp(strides[1])
+    logical_base = np.intp(i2 * strides[2] + i3 * strides[3])
+    block_bases = ((logical_base + row_offsets) // np.intp(qk)) * np.intp(block_bytes)
+    indices = block_bases[:, None] + np.arange(row_bytes, dtype=np.intp)
+    dst[indices] = packed.view(np.int8).reshape(rows, row_bytes)
+
+
+def _store_mul_mat_dense_rhs_and_dst_slice(
+    np: Any,
+    src1: Any,
+    expected: Any,
+    rhs: Any,
+    dot: Any,
+    *,
+    k: int,
+    rows: int,
+    cols: int,
+    src1_strides: tuple[int, int, int, int],
+    dst_strides: tuple[int, int, int, int],
+    i2: int,
+    i3: int,
+) -> None:
+    col_offsets = np.arange(cols, dtype=np.intp)
+    src1_bases = (
+        col_offsets * np.intp(src1_strides[1])
+        + np.intp(i2 * src1_strides[2])
+        + np.intp(i3 * src1_strides[3])
+    )
+    src1_indices = src1_bases[:, None] + np.arange(k, dtype=np.intp)
+    src1[src1_indices] = rhs
+
+    dst_bases = col_offsets * np.intp(dst_strides[1]) + np.intp(i2 * dst_strides[2]) + np.intp(i3 * dst_strides[3])
+    dst_indices = dst_bases[:, None] + np.arange(rows, dtype=np.intp)
+    expected[dst_indices] = dot
+
+
+def _mul_mat_q8_0_generic_arrays(np: Any, candidate: Candidate, seed: int, *, src1_dtype: str) -> dict[str, Any]:
+    src0_dims, src0_strides, k, rows, src0_logical_count = _packed_src0_buffer_layout(candidate)
+    src1_dims, dst_dims, src1_strides, dst_strides = _packed_matmul_dense_rhs_layout(candidate)
+    cols = int(dst_dims[1])
+    qk = 32
+    if src0_logical_count % qk != 0:
+        raise ValueError(f"q8_0 logical storage extent must be divisible by {qk}: {src0_logical_count}")
+    src0 = np.zeros(((src0_logical_count // qk) * Q8_0_BLOCK_BYTES,), dtype=np.int8)
+    src1_is_f16 = src1_dtype == "f16"
+    src1 = np.zeros((_buffer_length(src1_dims, src1_strides),), dtype=np.float16 if src1_is_f16 else np.float32)
+    dst_init = f32_pattern(np, (_buffer_length(dst_dims, dst_strides),), seed=seed + 2, scale=0.25)
+    expected = dst_init.copy()
+    lhs_by_slice = {}
+    for i03 in range(src0_dims[3]):
+        for i02 in range(src0_dims[2]):
+            lhs = f32_pattern(np, (rows, k), seed=seed + i02 + src0_dims[2] * i03)
+            packed = quantize_q8_0(np, lhs)
+            dequant = dequant_q8_0(np, packed, k, rows)
+            lhs_by_slice[(i02, i03)] = dequant
+            _store_mul_mat_packed_src0_slice(
+                np,
+                src0,
+                packed,
+                qk=qk,
+                block_bytes=Q8_0_BLOCK_BYTES,
+                row_bytes=q8_0_bytes(k, 1),
+                rows=rows,
+                strides=src0_strides,
+                i2=i02,
+                i3=i03,
+            )
+    src0_scale2 = dst_dims[2] // src0_dims[2]
+    src0_scale3 = dst_dims[3] // src0_dims[3]
+    for i3 in range(dst_dims[3]):
+        for i2 in range(dst_dims[2]):
+            src0_i2 = i2 // src0_scale2
+            src0_i3 = i3 // src0_scale3
+            lhs = lhs_by_slice[(src0_i2, src0_i3)]
+            rhs = f32_pattern(np, (cols, k), seed=seed + 1 + i2 + dst_dims[2] * i3)
+            if src1_is_f16:
+                rhs = rhs.astype(np.float16).astype(np.float32)
+            dot = np.matmul(lhs.astype(np.float32), rhs.T.astype(np.float32)).T.astype(np.float32)
+            _store_mul_mat_dense_rhs_and_dst_slice(
+                np,
+                src1,
+                expected,
+                rhs,
+                dot,
+                k=k,
+                rows=rows,
+                cols=cols,
+                src1_strides=src1_strides,
+                dst_strides=dst_strides,
+                i2=i2,
+                i3=i3,
+            )
+    return {
+        "arrays": {
+            "src0": src0,
+            "src1": _f16_bits(np, src1) if src1_is_f16 else src1,
+            "dst_init": dst_init,
+            "expected": expected,
+        },
+        "metadata": {
+            "kernel_abi_fixture": True,
+            "q8_0_block_bytes": Q8_0_BLOCK_BYTES,
+            "bytes": {"src0": int(src0.size), "src1": int(src1.size * (F16_BYTES if src1_is_f16 else F32_BYTES)), "dst": int(expected.size * F32_BYTES)},
+        },
+    }
+
+
+def _mul_mat_q4_k_generic_arrays(np: Any, candidate: Candidate, seed: int, *, src1_dtype: str) -> dict[str, Any]:
+    src0_dims, src0_strides, k, rows, src0_logical_count = _packed_src0_buffer_layout(candidate)
+    src1_dims, dst_dims, src1_strides, dst_strides = _packed_matmul_dense_rhs_layout(candidate)
+    cols = int(dst_dims[1])
+    qk = 256
+    if src0_logical_count % qk != 0:
+        raise ValueError(f"q4_k logical storage extent must be divisible by {qk}: {src0_logical_count}")
+    src0 = np.zeros(((src0_logical_count // qk) * Q4_K_BLOCK_BYTES,), dtype=np.int8)
+    src1_is_f16 = src1_dtype == "f16"
+    src1 = np.zeros((_buffer_length(src1_dims, src1_strides),), dtype=np.float16 if src1_is_f16 else np.float32)
+    dst_init = f32_pattern(np, (_buffer_length(dst_dims, dst_strides),), seed=seed + 2, scale=0.25)
+    expected = dst_init.copy()
+    lhs_by_slice = {}
+    for i03 in range(src0_dims[3]):
+        for i02 in range(src0_dims[2]):
+            packed = q4_k_pattern(np, k, rows, seed=seed + i02 + src0_dims[2] * i03)
+            lhs_by_slice[(i02, i03)] = dequant_q4_k(np, packed, k, rows)
+            row_bytes = q4_k_bytes(k, 1)
+            _store_mul_mat_packed_src0_slice(
+                np,
+                src0,
+                packed,
+                qk=qk,
+                block_bytes=Q4_K_BLOCK_BYTES,
+                row_bytes=row_bytes,
+                rows=rows,
+                strides=src0_strides,
+                i2=i02,
+                i3=i03,
+            )
+    src0_scale2 = dst_dims[2] // src0_dims[2]
+    src0_scale3 = dst_dims[3] // src0_dims[3]
+    for i3 in range(dst_dims[3]):
+        for i2 in range(dst_dims[2]):
+            src0_i2 = i2 // src0_scale2
+            src0_i3 = i3 // src0_scale3
+            lhs = lhs_by_slice[(src0_i2, src0_i3)]
+            rhs = normalized_f32_rows(np, (cols, k), seed=seed + 1 + i2 + dst_dims[2] * i3)
+            if src1_is_f16:
+                rhs = rhs.astype(np.float16).astype(np.float32)
+            dot = np.matmul(lhs.astype(np.float32), rhs.T.astype(np.float32)).T.astype(np.float32)
+            _store_mul_mat_dense_rhs_and_dst_slice(
+                np,
+                src1,
+                expected,
+                rhs,
+                dot,
+                k=k,
+                rows=rows,
+                cols=cols,
+                src1_strides=src1_strides,
+                dst_strides=dst_strides,
+                i2=i2,
+                i3=i3,
+            )
+    return {
+        "arrays": {
+            "src0": src0,
+            "src1": _f16_bits(np, src1) if src1_is_f16 else src1,
+            "dst_init": dst_init,
+            "expected": expected,
+        },
+        "metadata": {
+            "kernel_abi_fixture": True,
+            "q4_k_block_bytes": Q4_K_BLOCK_BYTES,
+            "bytes": {"src0": int(src0.size), "src1": int(src1.size * (F16_BYTES if src1_is_f16 else F32_BYTES)), "dst": int(expected.size * F32_BYTES)},
+        },
+    }
+
+
+def _mul_mat_qk_generic_arrays(
+    np: Any,
+    candidate: Candidate,
+    seed: int,
+    *,
+    block_bytes: int,
+    qtype: str,
+    pattern: Callable[..., Any],
+    dequant: Callable[[Any, Any, int, int], Any],
+) -> dict[str, Any]:
+    src0_dims, src0_strides, k, rows, src0_logical_count = _packed_src0_buffer_layout(candidate)
+    src1_dims, dst_dims, src1_strides, dst_strides = _packed_matmul_dense_rhs_layout(candidate)
+    cols = int(dst_dims[1])
+    qk = 256
+    if src0_logical_count % qk != 0:
+        raise ValueError(f"{qtype} logical storage extent must be divisible by {qk}: {src0_logical_count}")
+    src0 = np.zeros(((src0_logical_count // qk) * block_bytes,), dtype=np.int8)
+    src1 = np.zeros((_buffer_length(src1_dims, src1_strides),), dtype=np.float32)
+    dst_init = f32_pattern(np, (_buffer_length(dst_dims, dst_strides),), seed=seed + 2, scale=0.25)
+    expected = dst_init.copy()
+    lhs_by_slice = {}
+    for i03 in range(src0_dims[3]):
+        for i02 in range(src0_dims[2]):
+            packed = pattern(np, k, rows, seed=seed + i02 + src0_dims[2] * i03)
+            lhs_by_slice[(i02, i03)] = dequant(np, packed, k, rows)
+            row_bytes = (k // qk) * block_bytes
+            _store_mul_mat_packed_src0_slice(
+                np,
+                src0,
+                packed,
+                qk=qk,
+                block_bytes=block_bytes,
+                row_bytes=row_bytes,
+                rows=rows,
+                strides=src0_strides,
+                i2=i02,
+                i3=i03,
+            )
+    src0_scale2 = dst_dims[2] // src0_dims[2]
+    src0_scale3 = dst_dims[3] // src0_dims[3]
+    for i3 in range(dst_dims[3]):
+        for i2 in range(dst_dims[2]):
+            src0_i2 = i2 // src0_scale2
+            src0_i3 = i3 // src0_scale3
+            lhs = lhs_by_slice[(src0_i2, src0_i3)]
+            rhs = normalized_f32_rows(np, (cols, k), seed=seed + 1 + i2 + dst_dims[2] * i3)
+            dot = np.matmul(lhs.astype(np.float32), rhs.T.astype(np.float32)).T.astype(np.float32)
+            _store_mul_mat_dense_rhs_and_dst_slice(
+                np,
+                src1,
+                expected,
+                rhs,
+                dot,
+                k=k,
+                rows=rows,
+                cols=cols,
+                src1_strides=src1_strides,
+                dst_strides=dst_strides,
+                i2=i2,
+                i3=i3,
+            )
+    return {
+        "arrays": {
+            "src0": src0,
+            "src1": src1,
+            "dst_init": dst_init,
+            "expected": expected,
+        },
+        "metadata": {
+            "kernel_abi_fixture": True,
+            f"{qtype}_block_bytes": block_bytes,
+            "bytes": {"src0": int(src0.size), "src1": int(src1.size * F32_BYTES), "dst": int(expected.size * F32_BYTES)},
+        },
+    }
+
+
+def _mul_mat_q4_legacy_generic_arrays(
+    np: Any,
+    candidate: Candidate,
+    seed: int,
+    *,
+    block_bytes: int,
+    qtype: str,
+    src1_dtype: str,
+    pattern: Callable[..., Any],
+    dequant: Callable[[Any, Any, int, int], Any],
+) -> dict[str, Any]:
+    src0_dims, src0_strides, k, rows, src0_logical_count = _packed_src0_buffer_layout(candidate)
+    src1_dims, dst_dims, src1_strides, dst_strides = _packed_matmul_dense_rhs_layout(candidate)
+    cols = int(dst_dims[1])
+    qk = 32
+    if src0_logical_count % qk != 0:
+        raise ValueError(f"{qtype} logical storage extent must be divisible by {qk}: {src0_logical_count}")
+    src0 = np.zeros(((src0_logical_count // qk) * block_bytes,), dtype=np.int8)
+    src1_is_f16 = src1_dtype == "f16"
+    src1 = np.zeros((_buffer_length(src1_dims, src1_strides),), dtype=np.float16 if src1_is_f16 else np.float32)
+    dst_init = f32_pattern(np, (_buffer_length(dst_dims, dst_strides),), seed=seed + 2, scale=0.25)
+    expected = dst_init.copy()
+    lhs_by_slice = {}
+    for i03 in range(src0_dims[3]):
+        for i02 in range(src0_dims[2]):
+            packed = pattern(np, k, rows, seed=seed + i02 + src0_dims[2] * i03)
+            lhs_by_slice[(i02, i03)] = dequant(np, packed, k, rows)
+            row_bytes = packed.size // rows
+            _store_mul_mat_packed_src0_slice(
+                np,
+                src0,
+                packed,
+                qk=qk,
+                block_bytes=block_bytes,
+                row_bytes=row_bytes,
+                rows=rows,
+                strides=src0_strides,
+                i2=i02,
+                i3=i03,
+            )
+    src0_scale2 = dst_dims[2] // src0_dims[2]
+    src0_scale3 = dst_dims[3] // src0_dims[3]
+    for i3 in range(dst_dims[3]):
+        for i2 in range(dst_dims[2]):
+            src0_i2 = i2 // src0_scale2
+            src0_i3 = i3 // src0_scale3
+            lhs = lhs_by_slice[(src0_i2, src0_i3)]
+            rhs = f32_pattern(np, (cols, k), seed=seed + 1 + i2 + dst_dims[2] * i3)
+            if src1_is_f16:
+                rhs = rhs.astype(np.float16).astype(np.float32)
+            dot = np.matmul(lhs.astype(np.float32), rhs.T.astype(np.float32)).T.astype(np.float32)
+            _store_mul_mat_dense_rhs_and_dst_slice(
+                np,
+                src1,
+                expected,
+                rhs,
+                dot,
+                k=k,
+                rows=rows,
+                cols=cols,
+                src1_strides=src1_strides,
+                dst_strides=dst_strides,
+                i2=i2,
+                i3=i3,
+            )
+    return {
+        "arrays": {
+            "src0": src0,
+            "src1": _f16_bits(np, src1) if src1_is_f16 else src1,
+            "dst_init": dst_init,
+            "expected": expected,
+        },
+        "metadata": {
+            "kernel_abi_fixture": True,
+            f"{qtype}_block_bytes": block_bytes,
+            "bytes": {"src0": int(src0.size), "src1": int(src1.size * (F16_BYTES if src1_is_f16 else F32_BYTES)), "dst": int(expected.size * F32_BYTES)},
+        },
+    }
+
+
+def _mul_mat_q4_0_generic_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
+    src1_dtype = "f16" if candidate.source_id == "mul_mat_q4_0_f16_generic" else "f32"
+    return _mul_mat_q4_legacy_generic_arrays(
+        np,
+        candidate,
+        seed,
+        block_bytes=Q4_0_BLOCK_BYTES,
+        qtype="q4_0",
+        src1_dtype=src1_dtype,
+        pattern=q4_0_pattern,
+        dequant=dequant_q4_0,
+    )
+
+
+def _mul_mat_q4_1_generic_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
+    src1_dtype = "f16" if candidate.source_id == "mul_mat_q4_1_f16_generic" else "f32"
+    return _mul_mat_q4_legacy_generic_arrays(
+        np,
+        candidate,
+        seed,
+        block_bytes=Q4_1_BLOCK_BYTES,
+        qtype="q4_1",
+        src1_dtype=src1_dtype,
+        pattern=q4_1_pattern,
+        dequant=dequant_q4_1,
+    )
+
+
+def _mul_mat_q5_0_generic_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
+    return _mul_mat_q4_legacy_generic_arrays(
+        np,
+        candidate,
+        seed,
+        block_bytes=Q5_0_BLOCK_BYTES,
+        qtype="q5_0",
+        src1_dtype="f32",
+        pattern=q5_0_pattern,
+        dequant=dequant_q5_0,
+    )
+
+
+def _mul_mat_q5_1_generic_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
+    return _mul_mat_q4_legacy_generic_arrays(
+        np,
+        candidate,
+        seed,
+        block_bytes=Q5_1_BLOCK_BYTES,
+        qtype="q5_1",
+        src1_dtype="f32",
+        pattern=q5_1_pattern,
+        dequant=dequant_q5_1,
+    )
+
+
+def _mul_mat_q2_k_generic_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
+    return _mul_mat_qk_generic_arrays(
+        np,
+        candidate,
+        seed,
+        block_bytes=Q2_K_BLOCK_BYTES,
+        qtype="q2_k",
+        pattern=q2_k_pattern,
+        dequant=dequant_q2_k,
+    )
+
+
+def _mul_mat_q3_k_generic_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
+    return _mul_mat_qk_generic_arrays(
+        np,
+        candidate,
+        seed,
+        block_bytes=Q3_K_BLOCK_BYTES,
+        qtype="q3_k",
+        pattern=q3_k_pattern,
+        dequant=dequant_q3_k,
+    )
 
 
 def _mul_mat_q5_k_arrays(np: Any, candidate: Candidate, seed: int) -> dict[str, Any]:
@@ -3742,6 +4526,36 @@ ORACLE_SPECS: tuple[OracleSpec, ...] = (
         family_ids=("mul_mat_q8_0_f32",),
         generate=_logical_generate(LogicalOracleSpec(("mul_mat_q8_0_f32",), "mul_mat_q8_0_f32_numpy_dequant_matmul", {"atol": 0.08, "rtol": 0.02}, _mul_mat_q8_0_arrays, exact_kernel_abi=True)),
         write_workbench=_write_mul_mat_q8_0_workbench,
+    ),
+    OracleSpec(
+        family_ids=("mul_mat_q4_0_f32",),
+        generate=_logical_generate(LogicalOracleSpec(("mul_mat_q4_0_f32",), "mul_mat_q4_0_f32_numpy_dequant_matmul", {"atol": 0.08, "rtol": 0.02}, _mul_mat_q4_0_generic_arrays, exact_kernel_abi=True)),
+        write_workbench=_logical_workbench,
+    ),
+    OracleSpec(
+        family_ids=("mul_mat_q4_1_f32",),
+        generate=_logical_generate(LogicalOracleSpec(("mul_mat_q4_1_f32",), "mul_mat_q4_1_f32_numpy_dequant_matmul", {"atol": 0.08, "rtol": 0.02}, _mul_mat_q4_1_generic_arrays, exact_kernel_abi=True)),
+        write_workbench=_logical_workbench,
+    ),
+    OracleSpec(
+        family_ids=("mul_mat_q5_0_f32",),
+        generate=_logical_generate(LogicalOracleSpec(("mul_mat_q5_0_f32",), "mul_mat_q5_0_f32_numpy_dequant_matmul", {"atol": 0.08, "rtol": 0.02}, _mul_mat_q5_0_generic_arrays, exact_kernel_abi=True)),
+        write_workbench=_logical_workbench,
+    ),
+    OracleSpec(
+        family_ids=("mul_mat_q5_1_f32",),
+        generate=_logical_generate(LogicalOracleSpec(("mul_mat_q5_1_f32",), "mul_mat_q5_1_f32_numpy_dequant_matmul", {"atol": 0.08, "rtol": 0.02}, _mul_mat_q5_1_generic_arrays, exact_kernel_abi=True)),
+        write_workbench=_logical_workbench,
+    ),
+    OracleSpec(
+        family_ids=("mul_mat_q2_k_f32",),
+        generate=_logical_generate(LogicalOracleSpec(("mul_mat_q2_k_f32",), "mul_mat_q2_k_f32_numpy_dequant_matmul", {"atol": 0.12, "rtol": 0.04}, _mul_mat_q2_k_generic_arrays, exact_kernel_abi=True)),
+        write_workbench=_logical_workbench,
+    ),
+    OracleSpec(
+        family_ids=("mul_mat_q3_k_f32",),
+        generate=_logical_generate(LogicalOracleSpec(("mul_mat_q3_k_f32",), "mul_mat_q3_k_f32_numpy_dequant_matmul", {"atol": 0.12, "rtol": 0.04}, _mul_mat_q3_k_generic_arrays, exact_kernel_abi=True)),
+        write_workbench=_logical_workbench,
     ),
     OracleSpec(
         family_ids=("mul_mat_q5_k_f32",),

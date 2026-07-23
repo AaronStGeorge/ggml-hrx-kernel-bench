@@ -114,8 +114,26 @@ std::optional<DType> ParseDType(std::string_view value) {
   if (value == "i32") {
     return DType::kI32;
   }
+  if (value == "q2_k") {
+    return DType::kQ2K;
+  }
+  if (value == "q3_k") {
+    return DType::kQ3K;
+  }
+  if (value == "q4_0") {
+    return DType::kQ4_0;
+  }
+  if (value == "q4_1") {
+    return DType::kQ4_1;
+  }
   if (value == "q4_k") {
     return DType::kQ4K;
+  }
+  if (value == "q5_0") {
+    return DType::kQ5_0;
+  }
+  if (value == "q5_1") {
+    return DType::kQ5_1;
   }
   if (value == "q5_k") {
     return DType::kQ5K;
@@ -569,8 +587,11 @@ std::uint32_t ReadLe32(const unsigned char *bytes) {
 }
 
 bool IsPackedQuantDType(DType dtype) {
-  return dtype == DType::kQ4K || dtype == DType::kQ5K || dtype == DType::kQ6K ||
-         dtype == DType::kQ8_0;
+  return dtype == DType::kQ2K || dtype == DType::kQ3K ||
+         dtype == DType::kQ4_0 || dtype == DType::kQ4_1 ||
+         dtype == DType::kQ4K || dtype == DType::kQ5_0 ||
+         dtype == DType::kQ5_1 || dtype == DType::kQ5K ||
+         dtype == DType::kQ6K || dtype == DType::kQ8_0;
 }
 
 std::optional<std::string> BuildNpyStorageBindingSpec(const std::string &path,
@@ -1248,8 +1269,20 @@ std::string ToString(DType dtype) {
     return "f16";
   case DType::kI32:
     return "i32";
+  case DType::kQ2K:
+    return "q2_k";
+  case DType::kQ3K:
+    return "q3_k";
+  case DType::kQ4_0:
+    return "q4_0";
+  case DType::kQ4_1:
+    return "q4_1";
   case DType::kQ4K:
     return "q4_k";
+  case DType::kQ5_0:
+    return "q5_0";
+  case DType::kQ5_1:
+    return "q5_1";
   case DType::kQ5K:
     return "q5_k";
   case DType::kQ6K:

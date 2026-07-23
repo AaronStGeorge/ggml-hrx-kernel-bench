@@ -502,6 +502,104 @@ MUL_MAT_Q8_BATCHED_SRC0 = {
     ),
 }
 
+MUL_MAT_Q4_K_BATCHED_SRC0 = {
+    "src0": _tensor(
+        dtype="Q4_K",
+        sizes=(256, 16, 3, 2),
+        strides=(1, 256, 4096, 12288),
+    ),
+    "src1": _tensor(
+        dtype="F32",
+        sizes=(256, 1, 3, 4),
+        strides=(1, 256, 256, 768),
+    ),
+    "dst": _tensor(
+        dtype="F32",
+        sizes=(16, 1, 3, 4),
+        strides=(1, 16, 16, 48),
+    ),
+}
+
+MUL_MAT_Q2_K_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q4_K_BATCHED_SRC0,
+    "src0",
+    _tensor(
+        dtype="Q2_K",
+        sizes=(256, 16, 3, 2),
+        strides=(1, 256, 4096, 12288),
+    ),
+)
+
+MUL_MAT_Q3_K_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q4_K_BATCHED_SRC0,
+    "src0",
+    _tensor(
+        dtype="Q3_K",
+        sizes=(256, 16, 3, 2),
+        strides=(1, 256, 4096, 12288),
+    ),
+)
+
+MUL_MAT_Q4_0_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q8_BATCHED_SRC0,
+    "src0",
+    _tensor(
+        dtype="Q4_0",
+        sizes=(256, 16, 2, 1),
+        strides=(1, 256, 4096, 8192),
+    ),
+)
+
+MUL_MAT_Q4_1_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q8_BATCHED_SRC0,
+    "src0",
+    _tensor(
+        dtype="Q4_1",
+        sizes=(256, 16, 2, 1),
+        strides=(1, 256, 4096, 8192),
+    ),
+)
+
+MUL_MAT_Q5_0_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q8_BATCHED_SRC0,
+    "src0",
+    _tensor(
+        dtype="Q5_0",
+        sizes=(256, 16, 2, 1),
+        strides=(1, 256, 4096, 8192),
+    ),
+)
+
+MUL_MAT_Q5_1_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q8_BATCHED_SRC0,
+    "src0",
+    _tensor(
+        dtype="Q5_1",
+        sizes=(256, 16, 2, 1),
+        strides=(1, 256, 4096, 8192),
+    ),
+)
+
+MUL_MAT_Q8_F16_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q8_BATCHED_SRC0,
+    "src1",
+    _tensor(
+        dtype="F16",
+        sizes=(256, 16, 2, 1),
+        strides=(1, 256, 4096, 8192),
+    ),
+)
+
+MUL_MAT_Q4_K_F16_BATCHED_SRC0 = _replace_tensor(
+    MUL_MAT_Q4_K_BATCHED_SRC0,
+    "src1",
+    _tensor(
+        dtype="F16",
+        sizes=(256, 1, 3, 4),
+        strides=(1, 256, 256, 768),
+    ),
+)
+
 MUL_MAT_F16_YAML_CASE_33 = {
     "src0": _tensor(
         dtype="F16",
@@ -762,6 +860,66 @@ POSITIVE_CASES = (
         "unbatched Q8_0 with flattened RHS tail columns",
         MUL_MAT_Q8_FLATTENED_RHS_TAIL,
         id="mul-mat-q8-flattened-rhs-tail",
+    ),
+    pytest.param(
+        "mul_mat_q8_0_f32_generic_4d",
+        "batched Q8_0 LHS fallback layout",
+        MUL_MAT_Q8_BATCHED_SRC0,
+        id="mul-mat-q8-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q4_k_f32_generic_4d",
+        "batched Q4_K LHS fallback layout",
+        MUL_MAT_Q4_K_BATCHED_SRC0,
+        id="mul-mat-q4-k-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q2_k_f32_generic_4d",
+        "batched Q2_K LHS fallback layout",
+        MUL_MAT_Q2_K_BATCHED_SRC0,
+        id="mul-mat-q2-k-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q3_k_f32_generic_4d",
+        "batched Q3_K LHS fallback layout",
+        MUL_MAT_Q3_K_BATCHED_SRC0,
+        id="mul-mat-q3-k-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q4_0_f32_generic_4d",
+        "batched Q4_0 LHS fallback layout",
+        MUL_MAT_Q4_0_BATCHED_SRC0,
+        id="mul-mat-q4-0-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q4_1_f32_generic_4d",
+        "batched Q4_1 LHS fallback layout",
+        MUL_MAT_Q4_1_BATCHED_SRC0,
+        id="mul-mat-q4-1-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q5_0_f32_generic_4d",
+        "batched Q5_0 LHS fallback layout",
+        MUL_MAT_Q5_0_BATCHED_SRC0,
+        id="mul-mat-q5-0-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q5_1_f32_generic_4d",
+        "batched Q5_1 LHS fallback layout",
+        MUL_MAT_Q5_1_BATCHED_SRC0,
+        id="mul-mat-q5-1-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q8_0_f16_generic_4d",
+        "batched Q8_0 LHS with F16 RHS fallback layout",
+        MUL_MAT_Q8_F16_BATCHED_SRC0,
+        id="mul-mat-q8-f16-generic-batched-src0",
+    ),
+    pytest.param(
+        "mul_mat_q4_k_f16_generic_4d",
+        "batched Q4_K LHS with F16 RHS fallback layout",
+        MUL_MAT_Q4_K_F16_BATCHED_SRC0,
+        id="mul-mat-q4-k-f16-generic-batched-src0",
     ),
     pytest.param(
         "mul_mat_f16_f32_generic_4d",

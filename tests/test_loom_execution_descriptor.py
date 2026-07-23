@@ -1385,6 +1385,62 @@ def test_descriptor_from_generated_f16_f16_generic_case_uses_f16_rhs(tmp_path: P
             "@hrx2_mul_mat_q4_k_f32_contiguous",
         ),
         (
+            "mul_mat_q4_k_f32",
+            "mul_mat_q4_k_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q4_k",
+            "@hrx2_mul_mat_q4_k_f32_generic",
+        ),
+        (
+            "mul_mat_q2_k_f32",
+            "mul_mat_q2_k_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q2_k",
+            "@hrx2_mul_mat_q2_k_f32_generic",
+        ),
+        (
+            "mul_mat_q3_k_f32",
+            "mul_mat_q3_k_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q3_k",
+            "@hrx2_mul_mat_q3_k_f32_generic",
+        ),
+        (
+            "mul_mat_q4_0_f32",
+            "mul_mat_q4_0_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q4_0",
+            "@hrx2_mul_mat_q4_0_f32_generic",
+        ),
+        (
+            "mul_mat_q4_1_f32",
+            "mul_mat_q4_1_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q4_1",
+            "@hrx2_mul_mat_q4_1_f32_generic",
+        ),
+        (
+            "mul_mat_q5_0_f32",
+            "mul_mat_q5_0_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q5_0",
+            "@hrx2_mul_mat_q5_0_f32_generic",
+        ),
+        (
+            "mul_mat_q5_1_f32",
+            "mul_mat_q5_1_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q5_1",
+            "@hrx2_mul_mat_q5_1_f32_generic",
+        ),
+        (
             "mul_mat_q5_k_f32",
             "mul_mat_q5_k_f32_contiguous_4d",
             ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src1_d0", "k", "rows", "cols"],
@@ -1407,6 +1463,14 @@ def test_descriptor_from_generated_f16_f16_generic_case_uses_f16_rhs(tmp_path: P
             [16, 16, 1, 1, 256, 256, 256, 16, 16],
             "q8_0",
             "@hrx2_mul_mat_q8_0_f32_contiguous",
+        ),
+        (
+            "mul_mat_q8_0_f32",
+            "mul_mat_q8_0_f32_generic_4d",
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            [16, 1, 3, 4, 256, 16, 2, 256],
+            "q8_0",
+            "@hrx2_mul_mat_q8_0_f32_generic",
         ),
     ],
 )
@@ -1460,6 +1524,75 @@ def test_descriptor_from_generated_mul_mat_quantized_case_uses_int8_storage(
     assert f"0:input:{src0_dtype}:{src0.size}:{tmp_path / descriptor['bindings'][0]['path']}" in command
     assert f"1:input:f32:{src1.size}:{tmp_path / descriptor['bindings'][1]['path']}" in command
     assert f"2:output:f32:{expected.size}:{tmp_path / descriptor['bindings'][2]['path']}" in command
+
+
+@pytest.mark.parametrize(
+    ("family", "route_id", "src0_dtype", "expected_root"),
+    [
+        (
+            "mul_mat_q4_k_f32",
+            "mul_mat_q4_k_f16_generic_4d",
+            "q4_k",
+            "@hrx2_mul_mat_q4_k_f16_generic",
+        ),
+        (
+            "mul_mat_q8_0_f32",
+            "mul_mat_q8_0_f16_generic_4d",
+            "q8_0",
+            "@hrx2_mul_mat_q8_0_f16_generic",
+        ),
+    ],
+)
+def test_descriptor_from_generated_mul_mat_quantized_f16_rhs_case_uses_int16_rhs_storage(
+    tmp_path: Path,
+    family: str,
+    route_id: str,
+    src0_dtype: str,
+    expected_root: str,
+) -> None:
+    assets = materialize_asset_root(tmp_path / "assets", force=True)
+    case_values = [16, 1, 3, 4, 256, 16, 2, 256]
+    result = descriptor_from_generated_case(
+        config_data=_generated_mul_mat_config(
+            family,
+            route_id,
+            ["d0", "d1", "d2", "d3", "src0_d0", "src0_d1", "src0_d3", "src1_d0"],
+            case_values,
+            src0_dtype=src0_dtype,
+            src1_dtype="f16",
+        ),
+        case_id="mul-mat-packed-f16-rhs-small",
+        case_values=case_values,
+        kernel_dir=assets / "kernels" / "v2",
+        routing_dir=assets / "catalog" / "v2",
+        target="gfx1100",
+        max_elements=65536,
+        oracle_fixture_dir=tmp_path / "oracle-fixtures",
+        descriptor_dir=tmp_path,
+    )
+
+    assert result.status == "emitted", result.reason
+    assert result.descriptor is not None
+    descriptor = result.descriptor
+    assert descriptor["root"] == expected_root
+    assert [binding["dtype"] for binding in descriptor["bindings"]] == [src0_dtype, "f16", "f32"]
+    src1 = np.load(tmp_path / descriptor["bindings"][1]["path"])
+    expected = np.load(tmp_path / descriptor["bindings"][2]["expect"]["path"])
+    assert src1.dtype == np.int16
+    assert expected.dtype == np.float32
+
+    descriptor_path = _write_descriptor(tmp_path, descriptor)
+    prepared = prepare_execution(
+        descriptor_path=descriptor_path,
+        fixture_dir=tmp_path / "fixtures",
+        output_path=tmp_path / "result.json",
+        runner="runner",
+        loom_link=None,
+        ggml_hrx_run_loom=None,
+        repo_root=tmp_path,
+    )
+    command = prepared.command
+    assert f"1:input:f16:{src1.size}:{tmp_path / descriptor['bindings'][1]['path']}" in command
 
 
 def test_descriptor_from_generated_swiglu_f32_case_uses_packed_input(tmp_path: Path) -> None:

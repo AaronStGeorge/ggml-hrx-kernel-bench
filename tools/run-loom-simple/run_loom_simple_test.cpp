@@ -459,7 +459,13 @@ void TestParsesI32BindingDType() {
 
 void TestParsesPackedQuantBindingDTypes() {
   const std::vector<std::pair<std::string, DType>> cases = {
+      {"q2_k", DType::kQ2K},
+      {"q3_k", DType::kQ3K},
+      {"q4_0", DType::kQ4_0},
+      {"q4_1", DType::kQ4_1},
       {"q4_k", DType::kQ4K},
+      {"q5_0", DType::kQ5_0},
+      {"q5_1", DType::kQ5_1},
       {"q5_k", DType::kQ5K},
       {"q6_k", DType::kQ6K},
       {"q8_0", DType::kQ8_0},
