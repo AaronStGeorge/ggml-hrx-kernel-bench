@@ -6,15 +6,12 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal
 
-from .layout import contiguous_strides
 from .matching import (
     route_accepts_attributes,
     route_accepts_tensors,
-    route_captures,
 )
-from .models import ConcreteTensor, ConcreteTensorDimension, V2Route
+from .models import ConcreteTensor, ConcreteTensorDimension
 from .query import RouteCatalog, routes_for_op
-
 
 ROUTE_QUERY_SCHEMA = "ggml_hrx_kernel_bench.route_query.v1"
 
@@ -235,85 +232,17 @@ def route_query_to_json(query: RouteQuery) -> dict[str, Any]:
     }
 
 
-def _synthetic_dimension_sizes(
-    dimensions_source: Any,
-    captures: Mapping[str, Any],
-) -> tuple[int, ...] | None:
-    if isinstance(dimensions_source, str):
-        dimensions = captures.get(dimensions_source)
-        if not isinstance(dimensions, tuple):
-            return None
-        return tuple(int(value) for value in dimensions)
-    if not isinstance(dimensions_source, tuple):
-        return None
-    sizes: list[int] = []
-    for entry in dimensions_source:
-        if isinstance(entry, int) and not isinstance(entry, bool):
-            sizes.append(int(entry))
-            continue
-        if not isinstance(entry, Mapping):
-            return None
-        source = entry.get("source")
-        index = entry.get("index")
-        if not isinstance(source, str) or not isinstance(index, int) or isinstance(index, bool):
-            return None
-        source_dimensions = captures.get(source)
-        if not isinstance(source_dimensions, tuple) or index < 0 or index >= len(source_dimensions):
-            return None
-        sizes.append(int(source_dimensions[index]))
-    return tuple(sizes)
-
-
-def _route_tensors_for_query(
-    route: V2Route,
-    tensors: Mapping[str, ConcreteTensor],
-) -> dict[str, ConcreteTensor] | None:
-    route_tensors = dict(tensors)
-    if not route.synthetic_tensors:
-        return route_tensors
-    real_tensor_names = set(route.tensors) - set(route.synthetic_tensors)
-    captures = route_captures(route, route_tensors, tensor_names=real_tensor_names)
-    if captures is None:
-        return None
-    for tensor_name, synthetic in route.synthetic_tensors.items():
-        sizes = _synthetic_dimension_sizes(synthetic.dimensions_source, captures)
-        if sizes is None:
-            return None
-        strides = contiguous_strides(sizes)
-        route_tensors[tensor_name] = ConcreteTensor(
-            dtype=synthetic.dtype,
-            dimensions=tuple(
-                ConcreteTensorDimension(
-                    name=f"d{index}",
-                    size=sizes[index],
-                    stride=strides[index],
-                )
-                for index in range(len(sizes))
-            ),
-        )
-    return route_tensors
-
-
-def materialize_route_query_tensors(
-    route: V2Route,
-    query: RouteQuery,
-) -> dict[str, ConcreteTensor] | None:
-    return _route_tensors_for_query(route, query.tensors)
-
-
 def select_route_query(catalog: RouteCatalog, query: RouteQuery) -> RouteSelection:
     tensor_names = set(query.tensors)
     for route in routes_for_op(catalog, query.operation):
-        required_tensor_names = set(route.tensors) - set(route.synthetic_tensors)
-        if required_tensor_names != tensor_names or not route_accepts_attributes(
+        if set(route.tensors) != tensor_names or not route_accepts_attributes(
             route,
             query.attributes,
         ):
             continue
-        route_tensors = materialize_route_query_tensors(route, query)
-        if route_tensors is None or not route_accepts_tensors(
+        if not route_accepts_tensors(
             route,
-            route_tensors,
+            query.tensors,
             query.attributes,
         ):
             continue

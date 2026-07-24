@@ -8,12 +8,10 @@ from .models import (
     BindingDefinition,
     ConstraintCheck,
     RouteConstraints,
-    SyntheticTensorDescriptor,
     TensorDescriptor,
     V2Route,
     ValueDefinition,
 )
-
 
 ROUTER_FILENAME = "router.json"
 
@@ -133,97 +131,6 @@ def _parse_tensors(path: Path, route_index: Any, raw: Any) -> dict[str, TensorDe
         str(name): _parse_tensor_descriptor(path, route_index, str(name), descriptor)
         for name, descriptor in raw.items()
     }
-
-
-def _parse_synthetic_tensor_descriptor(
-    path: Path,
-    route_index: Any,
-    tensor_name: str,
-    raw: Any,
-) -> SyntheticTensorDescriptor:
-    if not isinstance(raw, dict):
-        raise RuntimeError(
-            f"v2 synthetic tensor descriptor must be a JSON object for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    extra_keys = set(raw) - {"dtype", "dimensions"}
-    if extra_keys:
-        raise RuntimeError(
-            f"v2 synthetic tensor descriptor has unsupported keys {sorted(extra_keys)!r} for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    dtype = _normalize_dtype(raw.get("dtype"))
-    if dtype is None:
-        raise RuntimeError(
-            f"v2 synthetic tensor descriptor requires dtype for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    dimensions = raw.get("dimensions")
-    if isinstance(dimensions, str):
-        dimensions_source: Any = _parse_capture_name(path, route_index, tensor_name, "dimensions", dimensions)
-    elif isinstance(dimensions, list) and dimensions:
-        dimensions_source = tuple(
-            _parse_synthetic_dimension_source(path, route_index, tensor_name, index, entry)
-            for index, entry in enumerate(dimensions)
-        )
-    else:
-        raise RuntimeError(
-            f"v2 synthetic tensor descriptor dimensions must be a capture name or non-empty list for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    return SyntheticTensorDescriptor(
-        dtype=dtype,
-        dimensions_source=dimensions_source,
-    )
-
-
-def _parse_synthetic_dimension_source(
-    path: Path,
-    route_index: Any,
-    tensor_name: str,
-    index: int,
-    raw: Any,
-) -> Any:
-    if isinstance(raw, int) and not isinstance(raw, bool):
-        return raw
-    if not isinstance(raw, dict):
-        raise RuntimeError(
-            f"v2 synthetic tensor dimension {index} for route {route_index} tensor {tensor_name!r} must be an integer or JSON object: {path}"
-        )
-    source = raw.get("source")
-    source_index = raw.get("index")
-    extra_keys = set(raw) - {"source", "index"}
-    if extra_keys:
-        raise RuntimeError(
-            f"v2 synthetic tensor dimension {index} has unsupported keys {sorted(extra_keys)!r} for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    if not isinstance(source, str) or not source.strip():
-        raise RuntimeError(
-            f"v2 synthetic tensor dimension {index} source must reference a capture name for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    if not isinstance(source_index, int) or isinstance(source_index, bool) or source_index < 0:
-        raise RuntimeError(
-            f"v2 synthetic tensor dimension {index} index must be a non-negative integer for route {route_index} tensor {tensor_name!r}: {path}"
-        )
-    return {"source": source.strip(), "index": int(source_index)}
-
-
-def _parse_synthetic_tensors(
-    path: Path,
-    route_index: Any,
-    raw: Any,
-    tensors: dict[str, TensorDescriptor],
-) -> dict[str, SyntheticTensorDescriptor]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise RuntimeError(f"v2 route {route_index} synthetic_tensors must be a JSON object: {path}")
-    synthetic_tensors = {
-        str(name): _parse_synthetic_tensor_descriptor(path, route_index, str(name), descriptor)
-        for name, descriptor in raw.items()
-    }
-    missing = set(synthetic_tensors) - set(tensors)
-    if missing:
-        raise RuntimeError(
-            f"v2 route {route_index} synthetic_tensors must reference declared tensors, missing {sorted(missing)!r}: {path}"
-        )
-    return synthetic_tensors
 
 
 def _parse_value_definition(path: Path, route_index: Any, raw: Any) -> ValueDefinition:
@@ -646,7 +553,6 @@ def _parse_route_entry(path: Path, route_index: Any, op: str, raw: Any) -> V2Rou
         "kernel",
         "launch",
         "op",
-        "synthetic_tensors",
         "tensors",
         "values",
     }
@@ -662,7 +568,6 @@ def _parse_route_entry(path: Path, route_index: Any, op: str, raw: Any) -> V2Rou
         root_symbol=str(kernel["root_symbol"]),
         export_name=None if kernel.get("export_name") is None else str(kernel["export_name"]),
         tensors=tensors,
-        synthetic_tensors=_parse_synthetic_tensors(path, route_index, raw.get("synthetic_tensors"), tensors),
         values=_parse_values(path, route_index, raw.get("values")),
         constraints=_parse_constraints(path, route_index, raw.get("constraints")),
         attributes=_parse_attributes(path, route_index, raw.get("attributes")),

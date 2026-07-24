@@ -652,19 +652,37 @@ def test_v2_rms_norm_dispatch_uses_flattened_trailing_rows() -> None:
     assert candidate.dispatch["workgroup_count"] == [60, 1, 1]
 
 
-@pytest.mark.parametrize("route_id", ["soft_max_f32_contiguous_4d", "soft_max_f32_mask_contiguous_4d"])
-def test_v2_soft_max_dispatch_uses_flattened_trailing_rows(route_id: str) -> None:
+@pytest.mark.parametrize(
+    ("route_id", "shape", "expected_workgroup_count"),
+    [
+        (
+            "soft_max_f32_contiguous_4d",
+            {"d0": 16, "d1": 2, "d2": 32, "d3": 1},
+            [64, 1, 1],
+        ),
+        (
+            "soft_max_f32_mask_contiguous_2d",
+            {"d0": 16, "d1": 64},
+            [1, 1, 1],
+        ),
+    ],
+)
+def test_v2_soft_max_dispatch_uses_flattened_trailing_rows(
+    route_id: str,
+    shape: dict[str, int],
+    expected_workgroup_count: list[int],
+) -> None:
     catalog = load_route_catalog(ACTUAL_V2_ROUTING_DIR)
     route = next(current for current in routes_for_op(catalog, "SOFT_MAX") if current.id == route_id)
 
     candidate = candidate_from_shape(
         kernel_dir=ACTUAL_V2_KERNEL_DIR,
         route=route,
-        shape={"d0": 16, "d1": 2, "d2": 32, "d3": 1},
+        shape=shape,
     )
 
     assert candidate.config["@shape.soft_max.nrows"] == "64"
-    assert candidate.dispatch["workgroup_count"] == [64, 1, 1]
+    assert candidate.dispatch["workgroup_count"] == expected_workgroup_count
 
 
 def test_v2_flash_attn_ext_prefill_dispatch_uses_token_workgroups() -> None:
@@ -881,16 +899,15 @@ def test_v2_flash_attn_ext_fallback_decode_binds_llama_layout_and_padded_strides
 
     op_summary = summary["operations"][0]
     assert op_summary["op"] == "FLASH_ATTN_EXT"
-    assert op_summary["matched_case_count"] == 7
-    assert op_summary["unmatched_case_count"] == 0
-    assert op_summary["generated_config_count"] == 3
+    assert op_summary["matched_case_count"] == 6
+    assert op_summary["unmatched_case_count"] == 1
+    assert op_summary["generated_config_count"] == 2
     configs = [json.loads(Path(path).read_text()) for path in op_summary["generated_config_paths"]]
     configs_by_route: dict[str, list[dict[str, object]]] = {}
     for config in configs:
         configs_by_route.setdefault(str(config["route_id"]), []).append(config)
     assert set(configs_by_route) == {
-        "flash_attn_ext_f32_f16_fallback_decode_plain_mask_t1",
-        "flash_attn_ext_f32_f16_fallback_decode_nomask_t1",
+        "flash_attn_ext_f32_f16_fallback_decode_plain_mask_t1"
     }
     plain_config = next(
         config
@@ -923,11 +940,17 @@ def test_v2_flash_attn_ext_fallback_decode_binds_llama_layout_and_padded_strides
         kv_len = shape["src1_d1"]
         assert shape["src2_d1"] == kv_len
         assert shape["src3_d0"] == kv_len
-    nomask_config = configs_by_route["flash_attn_ext_f32_f16_fallback_decode_nomask_t1"][0]
-    assert nomask_config["execution_abi"]["entries"][4]["role"] == "src3"
-    nomask_shape = dict(zip(nomask_config["params"], nomask_config["cases"][0], strict=True))
-    assert nomask_shape["src3_d0"] == 4096
-    assert nomask_shape.get("src3_d1", nomask_shape["d1"]) == 1
+    route_unmatched = json.loads(
+        (
+            tmp_path
+            / "route-import"
+            / "ops"
+            / "FLASH_ATTN_EXT"
+            / "route-unmatched.json"
+        ).read_text()
+    )
+    assert len(route_unmatched["rows"]) == 1
+    assert len(route_unmatched["rows"][0]["case"]["inputs"]) == 3
 
 
 @pytest.mark.parametrize(
@@ -2032,7 +2055,9 @@ def test_yaml_route_import_falls_back_to_generic_rank4_f16_f16_large_broadcast_m
     assert config["route_id"] == "mul_mat_f16_f16_generic_4d"
 
 
-def test_yaml_route_import_matches_unmasked_rank4_soft_max_descriptor(tmp_path: Path) -> None:
+def test_yaml_route_import_keeps_missing_rank4_soft_max_mask_unmatched(
+    tmp_path: Path,
+) -> None:
     yaml_path = tmp_path / "soft_max.yaml"
     yaml_path.write_text(
         json.dumps(
@@ -2092,17 +2117,23 @@ def test_yaml_route_import_matches_unmasked_rank4_soft_max_descriptor(tmp_path: 
     )
 
     op_summary = next(row for row in summary["operations"] if row["op"] == "SOFT_MAX")
-    assert op_summary["matched_case_count"] == 2
-    assert op_summary["unmatched_case_count"] == 1
+    assert op_summary["matched_case_count"] == 1
+    assert op_summary["unmatched_case_count"] == 2
     route_matches = json.loads((output_dir / "ops" / "SOFT_MAX" / "route-matches.json").read_text())
     assert route_matches["rows"][0]["matched_route_ids"] == ["soft_max_f32_contiguous_4d"]
-    assert route_matches["rows"][1]["matched_route_ids"] == ["soft_max_f32_mask_contiguous_4d"]
     route_unmatched = json.loads((output_dir / "ops" / "SOFT_MAX" / "route-unmatched.json").read_text())
-    assert route_unmatched["rows"][0]["case"]["attributes"]["sinks"] == 1
+    assert [
+        (
+            row["case"]["attributes"]["mask"],
+            row["case"]["attributes"]["sinks"],
+        )
+        for row in route_unmatched["rows"]
+    ] == [(0, 1), (1, 0)]
     configs = {
         json.loads(Path(raw_path).read_text())["route_id"]: json.loads(Path(raw_path).read_text())
         for raw_path in summary["generated_config_paths"]
     }
+    assert set(configs) == {"soft_max_f32_contiguous_4d"}
     plain_shape = dict(
         zip(
             configs["soft_max_f32_contiguous_4d"]["params"],
@@ -2110,15 +2141,7 @@ def test_yaml_route_import_matches_unmasked_rank4_soft_max_descriptor(tmp_path: 
             strict=True,
         )
     )
-    masked_shape = dict(
-        zip(
-            configs["soft_max_f32_mask_contiguous_4d"]["params"],
-            configs["soft_max_f32_mask_contiguous_4d"]["cases"][0],
-            strict=True,
-        )
-    )
     assert plain_shape == {"d0": 16, "d1": 2, "d2": 32, "d3": 1}
-    assert masked_shape == {"d0": 16, "d1": 2, "d2": 32, "d3": 1}
     assert configs["soft_max_f32_contiguous_4d"]["execution_abi"]["entries"] == [
         {
             "position": 0,
@@ -2146,43 +2169,11 @@ def test_yaml_route_import_matches_unmasked_rank4_soft_max_descriptor(tmp_path: 
             },
         },
     ]
-    assert configs["soft_max_f32_mask_contiguous_4d"]["execution_abi"]["entries"] == [
-        {
-            "position": 0,
-            "role": "scale",
-            "kind": "scalar",
-            "dtype": "f32",
-            "value": 0.1,
-        },
-        {
-            "position": 1,
-            "role": "src0",
-            "kind": "input",
-            "dtype": "f32",
-            "fixture": "src0",
-        },
-        {
-            "position": 2,
-            "role": "mask",
-            "kind": "input",
-            "dtype": "f32",
-            "fixture": "mask",
-        },
-        {
-            "position": 3,
-            "role": "dst",
-            "kind": "output",
-            "dtype": "f32",
-            "fixture": "dst_init",
-            "expect": {
-                "fixture": "expected",
-                "mode": "close",
-            },
-        },
-    ]
 
 
-def test_yaml_route_import_matches_default_rank4_rope_descriptor(tmp_path: Path) -> None:
+def test_yaml_route_import_keeps_implicit_rope_positions_unmatched(
+    tmp_path: Path,
+) -> None:
     yaml_path = tmp_path / "rope.yaml"
     yaml_path.write_text(
         json.dumps(
@@ -2296,118 +2287,15 @@ def test_yaml_route_import_matches_default_rank4_rope_descriptor(tmp_path: Path)
     )
 
     op_summary = next(row for row in summary["operations"] if row["op"] == "ROPE")
-    assert op_summary["matched_case_count"] == 6
-    assert op_summary["unmatched_case_count"] == 0
+    assert op_summary["matched_case_count"] == 0
+    assert op_summary["unmatched_case_count"] == 6
+    assert op_summary["generated_config_count"] == 0
     route_matches = json.loads((output_dir / "ops" / "ROPE" / "route-matches.json").read_text())
-    assert route_matches["rows"][0]["matched_route_ids"] == ["rope_f32_normal_n128_h32_t2_contiguous_4d"]
-    assert route_matches["rows"][1]["matched_route_ids"] == ["rope_f32_normal_n128_h32_t2_contiguous_4d"]
-    assert route_matches["rows"][2]["matched_route_ids"] == ["rope_f32_normal_n128_h32_t2_contiguous_4d"]
-    assert route_matches["rows"][3]["matched_route_ids"] == ["rope_neox_f32_n64_h128_t2_contiguous_4d"]
-    assert route_matches["rows"][4]["matched_route_ids"] == ["rope_neox_f32_n64_h128_t2_contiguous_4d"]
-    assert route_matches["rows"][5]["matched_route_ids"] == ["rope_neox_f32_n64_h128_t2_contiguous_4d"]
-    route_shapes: dict[str, list[dict[str, int]]] = {}
-    route_abis: dict[str, dict[str, object]] = {}
-    for raw_path in summary["generated_config_paths"]:
-        config = json.loads(Path(raw_path).read_text())
-        route_shapes.setdefault(config["route_id"], []).extend(
-            dict(zip(config["params"], case_values, strict=True)) for case_values in config["cases"]
-        )
-        route_abis.setdefault(config["route_id"], config["execution_abi"])
-    normal_shapes = route_shapes["rope_f32_normal_n128_h32_t2_contiguous_4d"]
-    neox_shapes = route_shapes["rope_neox_f32_n64_h128_t2_contiguous_4d"]
-    normal_shape = next(shape for shape in normal_shapes if "src0_d1_stride" not in shape)
-    normal_padded_shape = next(shape for shape in normal_shapes if "src0_d1_stride" in shape)
-    neox_shape = next(shape for shape in neox_shapes if "src0_d1_stride" not in shape)
-    neox_padded_shape = next(shape for shape in neox_shapes if "src0_d1_stride" in shape)
-    assert normal_shape["rope.ncols"] == 128
-    assert normal_shape["rope.n_dims"] == 128
-    assert normal_shape["rope.nheads"] == 32
-    assert normal_shape["rope.ntokens"] == 2
-    assert normal_shape["rope.src0_head_stride"] == 128
-    assert normal_shape["rope.src0_token_stride"] == 4096
-    assert normal_shape["rope.dst_head_stride"] == 128
-    assert normal_shape["rope.dst_token_stride"] == 4096
-    assert normal_shape["rope.pos_token_stride"] == 1
-    assert normal_padded_shape["rope.src0_head_stride"] == 256
-    assert normal_padded_shape["rope.src0_token_stride"] == 32768
-    assert normal_padded_shape["rope.dst_head_stride"] == 128
-    assert normal_padded_shape["rope.dst_token_stride"] == 4096
-    normal_h64_shape = next(shape for shape in normal_shapes if shape["rope.nheads"] == 64)
-    assert normal_h64_shape["rope.ncols"] == 128
-    assert normal_h64_shape["rope.n_dims"] == 128
-    assert normal_h64_shape["rope.ntokens"] == 2
-    assert normal_h64_shape["rope.src0_head_stride"] == 128
-    assert normal_h64_shape["rope.src0_token_stride"] == 8192
-    assert normal_h64_shape["rope.dst_head_stride"] == 128
-    assert normal_h64_shape["rope.dst_token_stride"] == 8192
-    assert neox_shape["rope.ncols"] == 64
-    assert neox_shape["rope.n_dims"] == 64
-    assert neox_shape["rope.nheads"] == 128
-    assert neox_shape["rope.ntokens"] == 2
-    assert neox_shape["rope.src0_head_stride"] == 64
-    assert neox_shape["rope.src0_token_stride"] == 8192
-    assert neox_shape["rope.dst_head_stride"] == 64
-    assert neox_shape["rope.dst_token_stride"] == 8192
-    assert neox_shape["rope.pos_token_stride"] == 1
-    neox_h8_shape = next(shape for shape in neox_shapes if shape["rope.nheads"] == 8)
-    assert neox_h8_shape["rope.ncols"] == 64
-    assert neox_h8_shape["rope.n_dims"] == 64
-    assert neox_h8_shape["rope.ntokens"] == 2
-    assert neox_h8_shape["rope.src0_head_stride"] == 64
-    assert neox_h8_shape["rope.src0_token_stride"] == 512
-    assert neox_h8_shape["rope.dst_head_stride"] == 64
-    assert neox_h8_shape["rope.dst_token_stride"] == 512
-    assert neox_padded_shape["rope.src0_head_stride"] == 128
-    assert neox_padded_shape["rope.src0_token_stride"] == 65536
-    assert neox_padded_shape["rope.dst_head_stride"] == 64
-    assert neox_padded_shape["rope.dst_token_stride"] == 8192
-    expected_abi = [
-        {
-            "position": 0,
-            "role": "theta_scale",
-            "kind": "scalar",
-            "dtype": "f32",
-            "value": 0.75,
-        },
-        {
-            "position": 1,
-            "role": "freq_scale",
-            "kind": "scalar",
-            "dtype": "f32",
-            "value": 1.0,
-        },
-        {
-            "position": 2,
-            "role": "attn_factor",
-            "kind": "scalar",
-            "dtype": "f32",
-            "value": 1.0,
-        },
-        {
-            "position": 3,
-            "role": "src0",
-            "kind": "input",
-            "dtype": "f32",
-            "fixture": "src0",
-        },
-        {
-            "position": 4,
-            "role": "src1",
-            "kind": "input",
-            "dtype": "i32",
-            "fixture": "positions",
-        },
-        {
-            "position": 5,
-            "role": "dst",
-            "kind": "output",
-            "dtype": "f32",
-            "fixture": "dst_init",
-            "expect": {
-                "fixture": "expected",
-                "mode": "close",
-            },
-        },
-    ]
-    assert route_abis["rope_f32_normal_n128_h32_t2_contiguous_4d"]["entries"] == expected_abi
-    assert route_abis["rope_neox_f32_n64_h128_t2_contiguous_4d"]["entries"] == expected_abi
+    assert route_matches["rows"] == []
+    route_unmatched = json.loads(
+        (output_dir / "ops" / "ROPE" / "route-unmatched.json").read_text()
+    )
+    assert [row["case"]["case_index"] for row in route_unmatched["rows"]] == list(
+        range(6)
+    )
+    assert summary["generated_config_paths"] == []

@@ -104,7 +104,7 @@ def test_generator_preserves_every_materialized_operation_and_route_order(
     }
     generated = _generated_route_ids(output.read_text(encoding="utf-8"))
     assert len(expected) == 52
-    assert sum(len(route_ids) for route_ids in expected.values()) == 218
+    assert sum(len(route_ids) for route_ids in expected.values()) == 232
     assert list(generated) == sorted(expected)
     assert generated == expected
 

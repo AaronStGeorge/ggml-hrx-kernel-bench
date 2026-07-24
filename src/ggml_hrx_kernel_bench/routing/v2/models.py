@@ -95,12 +95,6 @@ class TensorDescriptor:
 
 
 @dataclass(frozen=True)
-class SyntheticTensorDescriptor:
-    dtype: str
-    dimensions_source: Any
-
-
-@dataclass(frozen=True)
 class ConcreteTensorDimension:
     name: str
     size: int
@@ -129,12 +123,10 @@ class V2Route:
     launch: Mapping[str, Any]
     bindings: tuple[BindingDefinition, ...]
     attributes: Mapping[str, Any] = field(default_factory=dict)
-    synthetic_tensors: Mapping[str, SyntheticTensorDescriptor] = field(default_factory=dict)
     architectures: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tensors", _freeze_mapping(self.tensors))
-        object.__setattr__(self, "synthetic_tensors", _freeze_mapping(self.synthetic_tensors))
         object.__setattr__(self, "attributes", _freeze_mapping(self.attributes))
         object.__setattr__(self, "launch", _freeze_mapping(self.launch))
 

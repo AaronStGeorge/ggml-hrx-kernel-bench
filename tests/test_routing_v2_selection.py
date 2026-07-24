@@ -11,7 +11,6 @@ from ggml_hrx_kernel_bench.routing.v2.models import (
     ConcreteTensorDimension,
     ConstraintCheck,
     RouteConstraints,
-    SyntheticTensorDescriptor,
     TensorDescriptor,
     V2Route,
 )
@@ -19,7 +18,6 @@ from ggml_hrx_kernel_bench.routing.v2.query import RouteCatalog
 from ggml_hrx_kernel_bench.routing.v2.selection import (
     ROUTE_QUERY_SCHEMA,
     RouteQuery,
-    materialize_route_query_tensors,
     route_query_from_json,
     route_query_to_json,
     select_route_query,
@@ -48,7 +46,6 @@ def _route(
     tensors: Mapping[str, TensorDescriptor] | None = None,
     constraints: tuple[ConstraintCheck, ...] = (),
     attributes: Mapping[str, Any] | None = None,
-    synthetic_tensors: Mapping[str, SyntheticTensorDescriptor] | None = None,
 ) -> V2Route:
     return V2Route(
         id=route_id,
@@ -74,7 +71,6 @@ def _route(
         launch={},
         bindings=(),
         attributes={} if attributes is None else attributes,
-        synthetic_tensors={} if synthetic_tensors is None else synthetic_tensors,
     )
 
 
@@ -264,138 +260,42 @@ def test_select_route_query_does_not_evaluate_routes_after_first_match(
     assert evaluated_route_ids == ["first"]
 
 
-def test_materialize_route_query_tensors_copies_dimensions_and_builds_contiguous_strides() -> None:
+def test_select_route_query_requires_exact_tensor_roles() -> None:
     route = _route(
-        "synthetic",
-        tensors={
-            "src0": TensorDescriptor("F32", "src_dimensions", "src_strides"),
-            "mask": TensorDescriptor("F16", "mask_dimensions", "mask_strides"),
-        },
-        synthetic_tensors={
-            "mask": SyntheticTensorDescriptor(
-                dtype="F16",
-                dimensions_source="src_dimensions",
-            )
-        },
-    )
-    query = RouteQuery(
-        operation="TEST",
-        tensors={"src0": _tensor(sizes=(2, 3, 4), strides=(12, 4, 1))},
-        attributes={"mode": 1},
-    )
-    captured_tensors = dict(query.tensors)
-    captured_attributes = dict(query.attributes)
-
-    materialized = materialize_route_query_tensors(route, query)
-
-    assert materialized is not None
-    assert materialized["mask"].dtype == "F16"
-    assert tuple(dimension.size for dimension in materialized["mask"].dimensions) == (2, 3, 4)
-    assert tuple(dimension.stride for dimension in materialized["mask"].dimensions) == (1, 2, 6)
-    assert dict(query.tensors) == captured_tensors
-    assert dict(query.attributes) == captured_attributes
-    assert "mask" not in query.tensors
-
-
-def test_materialize_route_query_tensors_assembles_constants_and_indexed_captures() -> None:
-    route = _route(
-        "synthetic",
+        "exact-roles",
         tensors={
             "src0": TensorDescriptor("F32", "src_dimensions", "src_strides"),
             "dst": TensorDescriptor("F32", "dst_dimensions", "dst_strides"),
-            "mask": TensorDescriptor("I32", "mask_dimensions", "mask_strides"),
-        },
-        synthetic_tensors={
-            "mask": SyntheticTensorDescriptor(
-                dtype="I32",
-                dimensions_source=(
-                    2,
-                    {"source": "src_dimensions", "index": 1},
-                    {"source": "dst_dimensions", "index": 0},
-                ),
-            )
-        },
-    )
-    query = RouteQuery(
-        operation="TEST",
-        tensors={
-            "src0": _tensor(sizes=(5, 7), strides=(1, 5)),
-            "dst": _tensor(sizes=(11, 13), strides=(1, 11)),
-        },
-    )
-
-    materialized = materialize_route_query_tensors(route, query)
-
-    assert materialized is not None
-    assert tuple(dimension.size for dimension in materialized["mask"].dimensions) == (2, 7, 11)
-    assert tuple(dimension.stride for dimension in materialized["mask"].dimensions) == (1, 2, 14)
-
-
-def test_select_route_query_materializes_synthetic_tensors_and_routes_attributes() -> None:
-    route = _route(
-        "synthetic",
-        tensors={
-            "src0": TensorDescriptor("F32", "src_dimensions", "src_strides"),
-            "dst": TensorDescriptor("F32", "dst_dimensions", "dst_strides"),
-            "mask": TensorDescriptor("F32", "mask_dimensions", "mask_strides"),
-        },
-        constraints=(
-            ConstraintCheck(equals=("src_dimensions", "dst_dimensions", "mask_dimensions")),
-            ConstraintCheck(name="attribute.mode", value=1, has_value=True),
-        ),
-        attributes={"mode": {"type": "i32"}},
-        synthetic_tensors={
-            "mask": SyntheticTensorDescriptor(dtype="F32", dimensions_source="dst_dimensions")
         },
     )
     catalog = _catalog(route)
-    tensors = {"src0": _tensor(), "dst": _tensor()}
+    exact_tensors = {
+        "src0": _tensor(),
+        "dst": _tensor(),
+    }
 
     matched = select_route_query(
         catalog,
+        RouteQuery(operation="TEST", tensors=exact_tensors),
+    )
+    missing_role = select_route_query(
+        catalog,
+        RouteQuery(operation="TEST", tensors={"src0": _tensor()}),
+    )
+    extra_role = select_route_query(
+        catalog,
         RouteQuery(
             operation="TEST",
-            tensors=tensors,
-            attributes={"mode": 1, "ignored_extra_attribute": True},
+            tensors={**exact_tensors, "mask": _tensor()},
         ),
-    )
-    unmatched = select_route_query(
-        catalog,
-        RouteQuery(operation="TEST", tensors=tensors, attributes={"mode": 2}),
     )
 
     assert matched.status == "matched"
-    assert matched.route_ids == ("synthetic",)
-    assert unmatched.status == "unmatched"
-    assert unmatched.route_ids == ()
-    assert unmatched.candidate_route_ids == ()
-
-
-def test_synthetic_tensor_dimensions_do_not_capture_route_attributes() -> None:
-    route = _route(
-        "synthetic",
-        tensors={
-            "src0": TensorDescriptor("F32", "src_dimensions", "src_strides"),
-            "mask": TensorDescriptor("F32", "mask_dimensions", "mask_strides"),
-        },
-        attributes={"shape": {"type": "i32[]"}},
-        synthetic_tensors={
-            "mask": SyntheticTensorDescriptor(
-                dtype="F32",
-                dimensions_source="attribute.shape",
-            )
-        },
-    )
-    query = RouteQuery(
-        operation="TEST",
-        tensors={"src0": _tensor()},
-        attributes={"shape": [2, 3]},
-    )
-
-    assert materialize_route_query_tensors(route, query) is None
-    assert select_route_query(_catalog(route), query).status == "unmatched"
-    assert query.attributes == {"shape": [2, 3]}
-    assert set(query.tensors) == {"src0"}
+    assert matched.route_ids == ("exact-roles",)
+    assert missing_role.status == "unmatched"
+    assert missing_role.route_ids == ()
+    assert extra_role.status == "unmatched"
+    assert extra_role.route_ids == ()
 
 
 def test_select_route_query_reports_unknown_operation_and_empty_tensors_as_unmatched() -> None:

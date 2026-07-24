@@ -654,11 +654,11 @@ def _soft_max_f32_execution_abi(route_id: str, *, masked: bool) -> dict[str, obj
 
 
 def _generated_soft_max_config(*, masked: bool = False) -> dict[str, object]:
-    route_id = "soft_max_f32_mask_contiguous_4d" if masked else "soft_max_f32_contiguous_4d"
+    route_id = "soft_max_f32_mask_contiguous_2d" if masked else "soft_max_f32_contiguous_4d"
     return {
         "kernel": "soft_max_f32",
-        "params": ["d0", "d1", "d2", "d3"],
-        "cases": [[4, 2, 1, 1]],
+        "params": ["d0", "d1"] if masked else ["d0", "d1", "d2", "d3"],
+        "cases": [[4, 2]] if masked else [[4, 2, 1, 1]],
         "route_id": route_id,
         "execution_abi": _soft_max_f32_execution_abi(route_id, masked=masked),
     }
@@ -719,10 +719,10 @@ def _rope_f32_execution_abi(route_id: str) -> dict[str, object]:
     }
 
 
-def _generated_rope_config(*, neox: bool = False) -> dict[str, object]:
-    route_id = "rope_neox_f32_n64_h128_t2_contiguous_4d" if neox else "rope_f32_normal_n128_h32_t2_contiguous_4d"
+def _generated_rope_config() -> dict[str, object]:
+    route_id = "rope_f32_normal_explicit_pos_n128_h32_t512_contiguous_4d"
     return {
-        "kernel": "rope_neox_f32" if neox else "rope_f32",
+        "kernel": "rope_f32",
         "params": [
             "d0",
             "d1",
@@ -730,8 +730,8 @@ def _generated_rope_config(*, neox: bool = False) -> dict[str, object]:
             "d3",
             "src1_d0",
             "src1_d1",
+            "src1_d2",
             "rope.ncols",
-            "rope.n_dims",
             "rope.nheads",
             "rope.ntokens",
             "rope.src0_head_stride",
@@ -739,12 +739,9 @@ def _generated_rope_config(*, neox: bool = False) -> dict[str, object]:
             "rope.dst_head_stride",
             "rope.dst_token_stride",
             "rope.pos_token_stride",
+            "rope.n_dims",
         ],
-        "cases": [
-            [64, 1, 2, 1, 1, 1, 64, 64, 1, 2, 64, 64, 64, 64, 1]
-            if neox
-            else [128, 32, 2, 1, 1, 1, 128, 128, 32, 2, 128, 4096, 128, 4096, 1]
-        ],
+        "cases": [[128, 32, 2, 1, 2, 1, 1, 128, 32, 2, 128, 4096, 128, 4096, 1, 128]],
         "route_id": route_id,
         "execution_abi": _rope_f32_execution_abi(route_id),
     }
@@ -1632,7 +1629,7 @@ def test_descriptor_from_generated_soft_max_f32_case_materializes_row_fixtures(
     result = descriptor_from_generated_case(
         config_data=_generated_soft_max_config(masked=masked),
         case_id="d0-4-d1-2-d2-1-d3-1",
-        case_values=[4, 2, 1, 1],
+        case_values=_generated_soft_max_config(masked=masked)["cases"][0],
         kernel_dir=assets / "kernels" / "v2",
         routing_dir=assets / "catalog" / "v2",
         target="gfx1100",
@@ -1656,7 +1653,7 @@ def test_descriptor_from_generated_soft_max_f32_case_materializes_row_fixtures(
     expected_binding_names = ["src0", "mask", "dst"] if masked else ["src0", "dst"]
     assert [binding["name"] for binding in descriptor["bindings"]] == expected_binding_names
     assert descriptor["metadata"]["element_counts"]["dst"] == 8
-    assert descriptor["metadata"]["dispatch"]["workgroup_count"] == [2, 1, 1]
+    assert descriptor["metadata"]["dispatch"]["workgroup_count"] == ([1, 1, 1] if masked else [2, 1, 1])
     expected = np.load(tmp_path / descriptor["bindings"][-1]["expect"]["path"])
     assert expected.shape == (8,)
     rows = expected.reshape(2, 4)
@@ -1684,23 +1681,13 @@ def test_descriptor_from_generated_soft_max_f32_case_materializes_row_fixtures(
         assert f"2:output:f32:8:{tmp_path / descriptor['bindings'][1]['path']}" in command
 
 
-@pytest.mark.parametrize(
-    ("neox", "expected_root", "expected_workgroup_count"),
-    [
-        (False, "@hrx2_rope_normal_f32", [16, 1, 1]),
-        (True, "@hrx2_rope_neox_f32", [1, 1, 1]),
-    ],
-)
 def test_descriptor_from_generated_rope_f32_case_uses_scalar_and_position_abi(
     tmp_path: Path,
-    neox: bool,
-    expected_root: str,
-    expected_workgroup_count: list[int],
 ) -> None:
     assets = materialize_asset_root(tmp_path / "assets", force=True)
-    case_values = _generated_rope_config(neox=neox)["cases"][0]
+    case_values = _generated_rope_config()["cases"][0]
     result = descriptor_from_generated_case(
-        config_data=_generated_rope_config(neox=neox),
+        config_data=_generated_rope_config(),
         case_id="rope-small",
         case_values=case_values,
         kernel_dir=assets / "kernels" / "v2",
@@ -1714,9 +1701,9 @@ def test_descriptor_from_generated_rope_f32_case_uses_scalar_and_position_abi(
     assert result.status == "emitted", result.reason
     assert result.descriptor is not None
     descriptor = result.descriptor
-    assert descriptor["root"] == expected_root
-    assert descriptor["workgroup_count"] == expected_workgroup_count
-    assert descriptor["metadata"]["dispatch"]["workgroup_count"] == expected_workgroup_count
+    assert descriptor["root"] == "@hrx2_rope_normal_f32"
+    assert descriptor["workgroup_count"] == [16, 1, 1]
+    assert descriptor["metadata"]["dispatch"]["workgroup_count"] == [16, 1, 1]
     assert descriptor["scalars"] == [
         {"name": "theta_scale", "position": 0, "dtype": "f32", "value": 0.75},
         {"name": "freq_scale", "position": 1, "dtype": "f32", "value": 1.1},

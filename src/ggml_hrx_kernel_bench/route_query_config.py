@@ -13,10 +13,8 @@ from .routing.v2.models import ConcreteTensor, V2Route
 from .routing.v2.query import RouteCatalog, load_route_catalog
 from .routing.v2.selection import (
     RouteQuery,
-    materialize_route_query_tensors,
     select_route_query,
 )
-
 
 ROUTE_QUERY_IMPORT_SCHEMA = "ggml_hrx_kernel_bench.route_query_import.v1"
 GENERATED_KERNEL_TESTS_SCHEMA = "ggml_hrx_kernel_bench.generated_kernel_tests.v1"
@@ -38,15 +36,6 @@ STATIC_SCALAR_ABI_BY_FAMILY: dict[str, tuple[dict[str, Any], ...]] = {
     "rope_f32": (
         {"role": "theta_scale", "dtype": "f32", "value": 0.75},
     ),
-    "rope_neox_f32": (
-        {"role": "theta_scale", "dtype": "f32", "value": 0.75},
-    ),
-    "rope_f16": (
-        {"role": "theta_scale", "dtype": "f32", "value": 0.75},
-    ),
-    "rope_neox_f16": (
-        {"role": "theta_scale", "dtype": "f32", "value": 0.75},
-    ),
 }
 ATTRIBUTE_SCALAR_ABI_BY_FAMILY: dict[str, tuple[dict[str, Any], ...]] = {
     "rms_norm_f32": (
@@ -56,18 +45,6 @@ ATTRIBUTE_SCALAR_ABI_BY_FAMILY: dict[str, tuple[dict[str, Any], ...]] = {
         {"role": "scale", "dtype": "f32", "attribute": "scale", "default": 0.75},
     ),
     "rope_f32": (
-        {"role": "freq_scale", "dtype": "f32", "attribute": "freq_scale", "default": 1.1},
-        {"role": "attn_factor", "dtype": "f32", "attribute": "attn_factor", "default": 0.9},
-    ),
-    "rope_neox_f32": (
-        {"role": "freq_scale", "dtype": "f32", "attribute": "freq_scale", "default": 1.1},
-        {"role": "attn_factor", "dtype": "f32", "attribute": "attn_factor", "default": 0.9},
-    ),
-    "rope_f16": (
-        {"role": "freq_scale", "dtype": "f32", "attribute": "freq_scale", "default": 1.1},
-        {"role": "attn_factor", "dtype": "f32", "attribute": "attn_factor", "default": 0.9},
-    ),
-    "rope_neox_f16": (
         {"role": "freq_scale", "dtype": "f32", "attribute": "freq_scale", "default": 1.1},
         {"role": "attn_factor", "dtype": "f32", "attribute": "attn_factor", "default": 0.9},
     ),
@@ -97,9 +74,6 @@ FIXTURE_BY_FAMILY_ROLE: dict[tuple[str, str], str] = {
     ("rms_norm_f32", "src0"): "src",
     ("soft_max_f32", "mask"): "mask",
     ("rope_f32", "src1"): "positions",
-    ("rope_neox_f32", "src1"): "positions",
-    ("rope_f16", "src1"): "positions",
-    ("rope_neox_f16", "src1"): "positions",
 }
 INPUT_ROLES_BY_FAMILY: dict[str, frozenset[str]] = {
     "soft_max_f32": frozenset({"mask"}),
@@ -147,7 +121,7 @@ def _config_filename(
 
 def _shape_binding_defaults(
     route: V2Route,
-    tensors: dict[str, ConcreteTensor],
+    tensors: Mapping[str, ConcreteTensor],
     existing: dict[str, int],
 ) -> dict[str, int]:
     defaults: dict[str, int] = {}
@@ -189,7 +163,7 @@ def _shape_binding_attribute_defaults(
 
 def _shape_binding_value_defaults(
     route: V2Route,
-    tensors: dict[str, ConcreteTensor],
+    tensors: Mapping[str, ConcreteTensor],
     existing: dict[str, int],
     attributes: Mapping[str, Any] | None = None,
 ) -> dict[str, int]:
@@ -211,7 +185,7 @@ def _shape_binding_value_defaults(
 
 def _resolve_shape_binding_default(
     key: str,
-    tensors: dict[str, ConcreteTensor],
+    tensors: Mapping[str, ConcreteTensor],
 ) -> int | None:
     if key.endswith("_stride"):
         base_key = key.removesuffix("_stride")
@@ -243,7 +217,7 @@ def _resolve_shape_binding_default(
 
 def _shape_for_matched_route(
     route: V2Route,
-    tensors: dict[str, ConcreteTensor],
+    tensors: Mapping[str, ConcreteTensor],
     attributes: Mapping[str, Any] | None = None,
 ) -> EncodedRouteShape:
     encoded = dict(encode_route_shape(route, tensors).items)
@@ -639,12 +613,7 @@ def _group_route_queries(
             raise RuntimeError(
                 f"{query_path}:{line_number}: routed operation {op!r} is absent from import metadata"
             )
-        route_tensors = materialize_route_query_tensors(route, query)
-        if route_tensors is None:
-            raise RuntimeError(
-                f"{query_path}:{line_number}: matched route {route.id!r} could not materialize tensors"
-            )
-        shape = _shape_for_matched_route(route, route_tensors, query.attributes)
+        shape = _shape_for_matched_route(route, query.tensors, query.attributes)
         params_key = tuple(shape.params)
         values_key = tuple(shape.values)
         attribute_key = _attribute_scalar_key(route, query.attributes)
