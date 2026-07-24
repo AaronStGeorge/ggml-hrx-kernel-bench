@@ -69,6 +69,7 @@ def test_generate_loom_descriptor_tests_cmake_registers_build_prepare_without_pr
             "--import-target",
             "kernel-llama-cpp-tests-v2",
             "--all-ops",
+            "--prepare-in-all",
         ],
     )
 
@@ -117,6 +118,58 @@ def test_generate_loom_descriptor_tests_cmake_registers_build_prepare_without_pr
     assert f'"{descriptor_generator_script}"' in dependencies
     assert f'"{descriptor_runner_script}"' in dependencies
     assert f'"{manifest_path}"' not in dependencies
+
+
+def test_generate_loom_descriptor_tests_cmake_can_leave_prepare_target_out_of_all(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_script_module(
+        "tests/infra/generate_loom_descriptor_tests_cmake.py",
+        "test_generate_loom_descriptor_tests_cmake_no_all",
+    )
+    grouped_yaml_path = tmp_path / "suite.yaml"
+    grouped_yaml_path.write_text("ops:\n  ADD: []\n", encoding="utf-8")
+    output_path = tmp_path / "generated-descriptor-tests.cmake"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_loom_descriptor_tests_cmake.py",
+            "--output",
+            str(output_path),
+            "--name",
+            "benchmark-tests-v2",
+            "--grouped-yaml",
+            str(grouped_yaml_path),
+            "--generated-import-dir",
+            str(tmp_path / "generated-import-dir"),
+            "--python-executable",
+            sys.executable,
+            "--descriptor-generator-script",
+            str(ROOT / "tests" / "infra" / "generate_loom_execution_descriptors.py"),
+            "--descriptor-runner-script",
+            str(ROOT / "tests" / "infra" / "run_loom_execution_descriptors.py"),
+            "--descriptor-output-dir",
+            str(tmp_path / "descriptors"),
+            "--prepare-output-dir",
+            str(tmp_path / "prepare"),
+            "--runner",
+            "$<TARGET_FILE:ggml-hrx-run-loom-simple>",
+            "--repo-root",
+            str(ROOT),
+            "--build-prepare-target",
+            "kernel-prepare-benchmark-tests-v2-generated",
+            "--import-target",
+            "benchmark-tests-v2",
+            "--all-ops",
+        ],
+    )
+
+    assert module.main() == 0
+    generated = output_path.read_text(encoding="utf-8")
+    assert "add_custom_target(kernel-prepare-benchmark-tests-v2-generated\n" in generated
+    assert "add_custom_target(kernel-prepare-benchmark-tests-v2-generated ALL" not in generated
 
 
 def test_generate_loom_descriptor_tests_cmake_registers_hsa_execution_when_enabled(

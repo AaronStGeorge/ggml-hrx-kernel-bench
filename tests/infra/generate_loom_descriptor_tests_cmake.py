@@ -128,6 +128,7 @@ def main() -> int:
     parser.add_argument('--tool-dir')
     parser.add_argument('--repo-root')
     parser.add_argument('--build-prepare-target')
+    parser.add_argument('--prepare-in-all', action='store_true')
     parser.add_argument('--import-target')
     parser.add_argument('--exclude-op', action='append', default=[])
     parser.add_argument('--all-ops', action='store_true')
@@ -241,9 +242,10 @@ def main() -> int:
             _set_properties(lines, name=execute_name, properties=execute_properties)
 
     if build_prepare_target:
+        target_all_arg = ' ALL' if args.prepare_in_all else ''
         lines.extend(
             [
-                f'add_custom_target({build_prepare_target} ALL',
+                f'add_custom_target({build_prepare_target}{target_all_arg}',
                 '  DEPENDS',
             ]
         )

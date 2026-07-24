@@ -17,7 +17,7 @@ set(
 )
 set(
   GGML_HRX_ACTIVE_ASSET_ROOT_METADATA_PATH
-  "${CMAKE_SOURCE_DIR}/build/generated/active-asset-root.json"
+  "${CMAKE_BINARY_DIR}/generated/active-asset-root.json"
   CACHE FILEPATH
   "Published metadata for the currently active materialized runtime asset root"
 )

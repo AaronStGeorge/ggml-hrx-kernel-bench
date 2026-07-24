@@ -1,7 +1,10 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(GGML_HRX_TESTS_ROOT ${CMAKE_SOURCE_DIR}/tests)
-include(GgmlHrxTests)
+include(GgmlHrxDescriptorSuites)
+include(GgmlHrxBenchmarkSuites)
+
+set(GGML_HRX_BENCHMARK_SCRIPT_TARGETS)
 
 set(GGML_HRX_BENCHMARK_LLAMA_3_3_8B_MUL_MAT_YAML
   ${CMAKE_CURRENT_SOURCE_DIR}/llama-3.3-8b-mul-mat.v2.yaml
@@ -43,6 +46,10 @@ add_loom_benchmark_script_materialization_target(
   OUTPUT_DIR ${GGML_HRX_BENCHMARK_LLAMA_3_3_8B_MUL_MAT_OUTPUT_DIR}
   OP MUL_MAT
   COMMENT "Generating Llama 8B MUL_MAT Loom benchmark scripts"
+)
+list(APPEND
+  GGML_HRX_BENCHMARK_SCRIPT_TARGETS
+  kernel-benchmark-llama-3-3-8b-mul-mat-v2-scripts
 )
 
 set(GGML_HRX_BENCHMARK_LLAMA_3_3_8B_MUL_MAT_Q8_0_F32_YAML
@@ -86,6 +93,10 @@ add_loom_benchmark_script_materialization_target(
   OP MUL_MAT
   COMMENT "Generating Llama 8B MUL_MAT q8_0/f32 Loom benchmark scripts"
 )
+list(APPEND
+  GGML_HRX_BENCHMARK_SCRIPT_TARGETS
+  kernel-benchmark-llama-3-3-8b-mul-mat-q8-0-f32-v2-scripts
+)
 
 # Auto-generated benchmark suite for MUL_MAT src0=f32_src1=f32_dst=f32
 set(GGML_HRX_BENCHMARK_LLAMA_CPP_MUL_MAT_SRC0_F32_SRC1_F32_DST_F32_YAML
@@ -128,4 +139,13 @@ add_loom_benchmark_script_materialization_target(
   OUTPUT_DIR ${GGML_HRX_BENCHMARK_LLAMA_CPP_MUL_MAT_SRC0_F32_SRC1_F32_DST_F32_OUTPUT_DIR}
   OP MUL_MAT
   COMMENT "Generating MUL_MAT src0=f32_src1=f32_dst=f32 Loom benchmark scripts"
+)
+list(APPEND
+  GGML_HRX_BENCHMARK_SCRIPT_TARGETS
+  kernel-benchmark-llama-cpp-mul-mat-src0-f32-src1-f32-dst-f32-v2-scripts
+)
+
+add_custom_target(
+  kernel-benchmark-v2-scripts
+  DEPENDS ${GGML_HRX_BENCHMARK_SCRIPT_TARGETS}
 )

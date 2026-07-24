@@ -180,6 +180,11 @@ function(ggml_hrx_configure_loom_tools)
     "Build loom-link, loom-compile, ggml-hrx-run-loom, and iree-test-loom from an hrx-systems source tree."
     ON
   )
+  option(
+    GGML_HRX_LOOM_TOOLS_IN_ALL
+    "Stage bench-owned Loom tools as part of the default build."
+    OFF
+  )
 
   set(_ggml_hrx_hrx_systems_source_dir_default "")
   if(DEFINED ENV{GGML_HRX_HRX_SYSTEMS_SOURCE_DIR} AND NOT "$ENV{GGML_HRX_HRX_SYSTEMS_SOURCE_DIR}" STREQUAL "")
@@ -319,7 +324,12 @@ function(ggml_hrx_configure_loom_tools)
       VERBATIM
     )
 
-    add_custom_target(ggml-hrx-loom-tools ALL
+    if(GGML_HRX_LOOM_TOOLS_IN_ALL)
+      set(_ggml_hrx_loom_tools_all_arg ALL)
+    else()
+      set(_ggml_hrx_loom_tools_all_arg)
+    endif()
+    add_custom_target(ggml-hrx-loom-tools ${_ggml_hrx_loom_tools_all_arg}
       DEPENDS ${_ggml_hrx_staged_tool_paths}
     )
 
