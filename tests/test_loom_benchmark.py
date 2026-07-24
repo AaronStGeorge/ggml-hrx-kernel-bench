@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -500,6 +501,7 @@ def test_generate_scripts_materializes_catalog_tree(tmp_path: Path, monkeypatch)
             case_id=None,
             no_dedupe=False,
             output_root=output_root,
+            summary_output_dir=None,
             tool_dir=None,
             benchmark_runner="/tools/iree-benchmark-loom",
             benchmark_device="amdgpu",
@@ -510,6 +512,7 @@ def test_generate_scripts_materializes_catalog_tree(tmp_path: Path, monkeypatch)
     )
 
     route_dir = output_root / "catalog" / "v2" / "ADD" / "add_f32_contiguous_4d"
+    summary_dir = output_root / "summary"
     route_manifest = json.loads((route_dir / "manifest.json").read_text(encoding="utf-8"))
     case_manifest_path = Path(route_manifest["cases"][0]["manifest_path"])
     case_script = (case_manifest_path.parent / "run.sh").read_text(encoding="utf-8")
@@ -518,6 +521,8 @@ def test_generate_scripts_materializes_catalog_tree(tmp_path: Path, monkeypatch)
 
     assert status == 0
     assert (output_root / "catalog" / "v2" / "index.json").is_file()
+    assert (summary_dir / "benchmark-route-summary.json").is_file()
+    assert (summary_dir / "benchmark-route-summary.md").is_file()
     assert (route_dir / "run.sh").stat().st_mode & 0o111
     assert (route_dir / "collect.sh").stat().st_mode & 0o111
     assert case_manifest_path.is_file()
@@ -539,15 +544,174 @@ def test_generate_scripts_materializes_catalog_tree(tmp_path: Path, monkeypatch)
     assert 'bash "$CASE_SCRIPT" "$RUN_DIR/cases/$CASE_NAME" "$@"' in route_script
     assert route_manifest["schema"] == common.SCRIPT_ROUTE_MANIFEST_SCHEMA
     assert route_manifest["case_count"] == 1
+    assert route_manifest["cases"][0]["shape"] == {"d0": 4}
     assert route_manifest["defaults"]["benchmark_runner"] == "/tools/iree-benchmark-loom"
     assert route_manifest["defaults"]["benchmark_device"] == "amdgpu"
     assert route_manifest["defaults"]["benchmark_measure"] == "dispatch_complete"
     case_manifest = json.loads(case_manifest_path.read_text(encoding="utf-8"))
     assert case_manifest["defaults"]["benchmark_device"] == "amdgpu"
     assert case_manifest["defaults"]["benchmark_measure"] == "dispatch_complete"
+    assert case_manifest["shape"] == {"d0": 4}
+    summary = json.loads(
+        (summary_dir / "benchmark-route-summary.json").read_text(encoding="utf-8")
+    )
+    summary_markdown = (summary_dir / "benchmark-route-summary.md").read_text(encoding="utf-8")
+    assert summary["schema"] == common.SCRIPT_BUILD_SUMMARY_SCHEMA
+    assert summary["summary_output_dir"] == str(summary_dir.resolve())
+    assert summary["case_count"] == 1
+    assert summary["routes"][0]["route_id"] == "add_f32_contiguous_4d"
+    assert summary["routes"][0]["kernel_source"] == str(repo_root / "build/generated/assets/kernels/v2/add/f32.loom")
+    assert summary["routes"][0]["cases"][0]["shape"] == {"d0": 4}
+    assert "`add_f32_contiguous_4d`" in summary_markdown
+    assert "`asset:kernels/v2/add/f32.loom`" in summary_markdown
     assert not (stale_route_dir / "run.sh").exists()
     assert not (stale_route_dir / "cases").exists()
     assert (stale_route_dir / "runs" / "keep.txt").is_file()
+
+
+def test_generate_scripts_uses_suite_defaults_and_writes_metadata(tmp_path: Path, monkeypatch) -> None:
+    prepare_root, repo_root, asset_root = _write_prepared_case(
+        tmp_path,
+        op="MUL_MAT",
+        route_id="mul_mat_f32_f32_large_tiled_4d",
+        case_id="large",
+    )
+    suite_prepare_root = (
+        repo_root
+        / "build"
+        / "benchmarks"
+        / "artifacts"
+        / "kernel-prepare-llama-cpp-mul-mat-src0-f32-src1-f32-dst-f32-v2"
+    )
+    suite_prepare_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(prepare_root, suite_prepare_root)
+    asset_root.mkdir(parents=True, exist_ok=True)
+    output_root = tmp_path / "benchmarks"
+
+    def fake_workbench(*, case, run_dir, repo_root, loom_link, kernel_source_override=None):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        workbench = run_dir / "benchmark.loom"
+        workbench.write_text("check.benchmark<@case> @bench\n", encoding="utf-8")
+        return (
+            workbench,
+            "@bench_mul_mat",
+            {
+                "descriptor_kernel_source": case.kernel_source,
+                "descriptor_kernel_source_hash": "descriptor-hash",
+                "effective_kernel_source": str(kernel_source_override or case.kernel_source),
+                "effective_kernel_source_hash": "effective-hash",
+                "source_override_used": kernel_source_override is not None,
+            },
+        )
+
+    monkeypatch.setattr(materialize, "_write_descriptor_workbench", fake_workbench)
+
+    status = materialize.command_generate_scripts(
+        SimpleNamespace(
+            suite="llama-cpp-mul-mat-f32-f32",
+            prepare_root=None,
+            repo_root=repo_root,
+            asset_root=None,
+            op=None,
+            route_id="mul_mat_f32_f32_large_tiled_4d",
+            implementation_id=None,
+            kernel_source=None,
+            root=None,
+            case_id=None,
+            no_dedupe=False,
+            output_root=output_root,
+            summary_output_dir=None,
+            tool_dir=None,
+            benchmark_runner="/tools/iree-benchmark-loom",
+            benchmark_device="amdgpu",
+            benchmark_measure="dispatch_complete",
+            loom_link="/tools/loom-link",
+            python_executable=sys.executable,
+        )
+    )
+
+    route_dir = output_root / "catalog" / "v2" / "MUL_MAT" / "mul_mat_f32_f32_large_tiled_4d"
+    catalog_index = json.loads((output_root / "catalog" / "v2" / "index.json").read_text(encoding="utf-8"))
+    op_index = json.loads((output_root / "catalog" / "v2" / "MUL_MAT" / "index.json").read_text(encoding="utf-8"))
+    route_manifest = json.loads((route_dir / "manifest.json").read_text(encoding="utf-8"))
+    summary_dir = output_root.parent / "llama-cpp-mul-mat-f32-f32"
+    summary = json.loads(
+        (summary_dir / "benchmark-route-summary.json").read_text(encoding="utf-8")
+    )
+
+    assert status == 0
+    assert catalog_index["suite"]["name"] == "llama-cpp-mul-mat-f32-f32"
+    assert catalog_index["suite"]["prepare_root"] == str(suite_prepare_root.resolve())
+    assert catalog_index["suite"]["asset_root"] == str(asset_root.resolve())
+    assert op_index["suite"]["name"] == "llama-cpp-mul-mat-f32-f32"
+    assert route_manifest["suite"]["script_target"] == (
+        "kernel-benchmark-llama-cpp-mul-mat-src0-f32-src1-f32-dst-f32-v2-scripts"
+    )
+    assert summary["suite"]["name"] == "llama-cpp-mul-mat-f32-f32"
+    assert summary["summary_output_dir"] == str(summary_dir.resolve())
+    assert route_manifest["prepare_root"] == str(suite_prepare_root.resolve())
+    assert route_manifest["asset_root"] == str(asset_root.resolve())
+
+
+def test_generate_scripts_suite_allows_explicit_overrides(tmp_path: Path, monkeypatch) -> None:
+    prepare_root, repo_root, asset_root = _write_prepared_case(
+        tmp_path,
+        op="ADD",
+        route_id="add_f32_contiguous_4d",
+        case_id="override",
+    )
+    output_root = tmp_path / "benchmarks"
+
+    def fake_workbench(*, case, run_dir, repo_root, loom_link, kernel_source_override=None):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        workbench = run_dir / "benchmark.loom"
+        workbench.write_text("check.benchmark<@case> @bench\n", encoding="utf-8")
+        return (
+            workbench,
+            "@bench_add",
+            {
+                "descriptor_kernel_source": case.kernel_source,
+                "descriptor_kernel_source_hash": "descriptor-hash",
+                "effective_kernel_source": str(kernel_source_override or case.kernel_source),
+                "effective_kernel_source_hash": "effective-hash",
+                "source_override_used": kernel_source_override is not None,
+            },
+        )
+
+    monkeypatch.setattr(materialize, "_write_descriptor_workbench", fake_workbench)
+
+    status = materialize.command_generate_scripts(
+        SimpleNamespace(
+            suite="llama-cpp-mul-mat-f32-f32",
+            prepare_root=prepare_root,
+            repo_root=repo_root,
+            asset_root=asset_root,
+            op="ADD",
+            route_id="add_f32_contiguous_4d",
+            implementation_id=None,
+            kernel_source=None,
+            root=None,
+            case_id=None,
+            no_dedupe=False,
+            output_root=output_root,
+            summary_output_dir=None,
+            tool_dir=None,
+            benchmark_runner="/tools/iree-benchmark-loom",
+            benchmark_device="amdgpu",
+            benchmark_measure="dispatch_complete",
+            loom_link="/tools/loom-link",
+            python_executable=sys.executable,
+        )
+    )
+
+    route_dir = output_root / "catalog" / "v2" / "ADD" / "add_f32_contiguous_4d"
+    route_manifest = json.loads((route_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert status == 0
+    assert route_manifest["suite"]["name"] == "llama-cpp-mul-mat-f32-f32"
+    assert route_manifest["prepare_root"] == str(prepare_root.resolve())
+    assert route_manifest["asset_root"] == str(asset_root.resolve())
+    assert route_manifest["op"] == "ADD"
 
 
 def test_generate_scripts_bakes_candidate_kernel_source(tmp_path: Path, monkeypatch) -> None:
@@ -588,6 +752,7 @@ def test_generate_scripts_bakes_candidate_kernel_source(tmp_path: Path, monkeypa
                 case_id=None,
                 no_dedupe=False,
                 output_root=output_root,
+                summary_output_dir=None,
                 tool_dir=None,
                 benchmark_runner="/tools/iree-benchmark-loom",
                 benchmark_device="amdgpu",
@@ -656,6 +821,7 @@ def test_collect_generated_route_run_writes_results_and_summary(tmp_path: Path, 
                 case_id=None,
                 no_dedupe=False,
                 output_root=output_root,
+                summary_output_dir=None,
                 tool_dir=None,
                 benchmark_runner="/tools/iree-benchmark-loom",
                 benchmark_device="amdgpu",

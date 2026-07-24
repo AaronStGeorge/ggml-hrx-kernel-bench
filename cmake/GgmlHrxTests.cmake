@@ -441,6 +441,8 @@ function(add_loom_benchmark_script_materialization_target)
     PREPARE_TARGET
     OUTPUT_DIR
     ASSET_ROOT
+    SUITE
+    SUMMARY_OUTPUT_DIR
     OP
     COMMENT
   )
@@ -475,6 +477,16 @@ function(add_loom_benchmark_script_materialization_target)
   endif()
 
   set(index_path ${GGML_HRX_LBST_OUTPUT_DIR}/catalog/v2/index.json)
+  set(summary_output_dir ${GGML_HRX_LBST_SUMMARY_OUTPUT_DIR})
+  if(NOT summary_output_dir)
+    if(GGML_HRX_LBST_SUITE)
+      set(summary_output_dir ${CMAKE_BINARY_DIR}/benchmarks/${GGML_HRX_LBST_SUITE})
+    else()
+      set(summary_output_dir ${GGML_HRX_LBST_OUTPUT_DIR}/summary)
+    endif()
+  endif()
+  set(summary_json_path ${summary_output_dir}/benchmark-route-summary.json)
+  set(summary_markdown_path ${summary_output_dir}/benchmark-route-summary.md)
   set(materialize_command
     ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/infra/materialize_loom_benchmarks.py
@@ -482,8 +494,12 @@ function(add_loom_benchmark_script_materialization_target)
     --repo-root ${CMAKE_SOURCE_DIR}
     --asset-root ${asset_root}
     --output-root ${GGML_HRX_LBST_OUTPUT_DIR}
+    --summary-output-dir ${summary_output_dir}
     --op ${GGML_HRX_LBST_OP}
   )
+  if(GGML_HRX_LBST_SUITE)
+    list(APPEND materialize_command --suite ${GGML_HRX_LBST_SUITE})
+  endif()
   if(GGML_HRX_TOOL_DIR)
     list(APPEND materialize_command --tool-dir ${GGML_HRX_TOOL_DIR})
   endif()
@@ -496,6 +512,7 @@ function(add_loom_benchmark_script_materialization_target)
     ${CMAKE_SOURCE_DIR}/src/ggml_hrx_kernel_bench/benchmarking/common.py
     ${CMAKE_SOURCE_DIR}/src/ggml_hrx_kernel_bench/benchmarking/discovery.py
     ${CMAKE_SOURCE_DIR}/src/ggml_hrx_kernel_bench/benchmarking/materialize.py
+    ${CMAKE_SOURCE_DIR}/src/ggml_hrx_kernel_bench/benchmarking/summary.py
     ${CMAKE_SOURCE_DIR}/src/ggml_hrx_kernel_bench/benchmarking/workbench.py
     ${CMAKE_SOURCE_DIR}/src/ggml_hrx_kernel_bench/loom_execution_descriptor.py
   )
@@ -510,6 +527,9 @@ function(add_loom_benchmark_script_materialization_target)
 
   add_custom_command(
     OUTPUT ${index_path}
+    BYPRODUCTS
+      ${summary_json_path}
+      ${summary_markdown_path}
     COMMAND ${materialize_command}
     DEPENDS
       ${materialize_depends}
@@ -521,5 +541,7 @@ function(add_loom_benchmark_script_materialization_target)
     ${GGML_HRX_LBST_NAME}
     DEPENDS
       ${index_path}
+      ${summary_json_path}
+      ${summary_markdown_path}
   )
 endfunction()

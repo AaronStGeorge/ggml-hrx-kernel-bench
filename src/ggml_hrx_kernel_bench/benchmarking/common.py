@@ -14,6 +14,7 @@ COMPARE_SCHEMA = "ggml_hrx_kernel_bench.loom_benchmark_compare.v1"
 SCRIPT_INDEX_SCHEMA = "ggml_hrx_kernel_bench.loom_benchmark_script_index.v1"
 SCRIPT_ROUTE_MANIFEST_SCHEMA = "ggml_hrx_kernel_bench.loom_benchmark_script_route.v1"
 SCRIPT_CASE_MANIFEST_SCHEMA = "ggml_hrx_kernel_bench.loom_benchmark_script_case.v1"
+SCRIPT_BUILD_SUMMARY_SCHEMA = "ggml_hrx_kernel_bench.loom_benchmark_script_build_summary.v1"
 FLOP_ESTIMATE_SCHEMA = "ggml_hrx_kernel_bench.flop_estimate.v1"
 
 

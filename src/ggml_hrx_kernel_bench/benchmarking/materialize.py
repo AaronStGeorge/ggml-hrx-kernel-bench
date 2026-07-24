@@ -27,6 +27,8 @@ from .discovery import (
     estimate_case_flops,
     shape_bucket_for_case,
 )
+from .summary import write_benchmark_route_summary
+from .suites import get_suite, list_suites, missing_artifact_message
 from .workbench import _write_descriptor_workbench
 
 
@@ -168,6 +170,13 @@ def _run_case_dir_name(case: DescriptorCase) -> str:
     return _safe_name(f"{case.case_id}-{case.execution_digest[:12]}")
 
 
+def _descriptor_shape(case: DescriptorCase) -> dict[str, Any]:
+    metadata = case.descriptor.get("metadata", {})
+    if isinstance(metadata, dict) and isinstance(metadata.get("shape"), dict):
+        return dict(metadata["shape"])
+    return {}
+
+
 def _remove_generated_route_files(route_dir: Path) -> None:
     for name in ("manifest.json", "run.sh", "aggregate.sh", "collect.sh"):
         path = route_dir / name
@@ -194,7 +203,7 @@ def _clean_generated_catalog(catalog_root: Path) -> None:
             except ValueError:
                 continue
             _remove_generated_route_files(route_dir)
-    for name in ("index.json", "run-all.sh"):
+    for name in ("index.json", "run-all.sh", "benchmark-route-summary.json", "benchmark-route-summary.md"):
         path = catalog_root / name
         if path.is_file():
             path.unlink()
@@ -243,6 +252,7 @@ def _generated_script_case_manifest(
         "case_dir": str(case_dir),
         "route_dir": str(route_dir),
         "repo_root": str(repo_root),
+        "shape": _descriptor_shape(case),
         "shape_bucket": shape_bucket_for_case(case, flop_estimate=flop_estimate),
         "flop_estimate": flop_estimate,
         "estimated_flops": flop_estimate.get("estimated_flops"),
@@ -267,8 +277,9 @@ def _generated_script_route_manifest(
     benchmark_runner: str,
     benchmark_device: str,
     benchmark_measure: str,
+    suite_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    manifest = {
         "schema": SCRIPT_ROUTE_MANIFEST_SCHEMA,
         "timestamp": _timestamp(),
         "op": bucket.op,
@@ -294,6 +305,7 @@ def _generated_script_route_manifest(
                 "descriptor_execution_digest": item["descriptor_execution_digest"],
                 "benchmark_symbol": item["benchmark_symbol"],
                 "workbench_path": item["workbench_path"],
+                "shape": item["shape"],
                 "estimated_flops": item["estimated_flops"],
                 "flop_estimate": item["flop_estimate"],
                 "shape_bucket": item["shape_bucket"],
@@ -306,9 +318,46 @@ def _generated_script_route_manifest(
             "benchmark_measure": benchmark_measure,
         },
     }
+    if suite_metadata is not None:
+        manifest["suite"] = suite_metadata
+    return manifest
+
+
+def _resolved_suite_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    suite_name = getattr(args, "suite", None)
+    if not suite_name:
+        if getattr(args, "prepare_root", None) is None:
+            raise RuntimeError("--prepare-root is required unless --suite is used")
+        return None
+
+    repo_root = args.repo_root.resolve()
+    suite = get_suite(suite_name, repo_root=repo_root)
+    if getattr(args, "prepare_root", None) is None:
+        args.prepare_root = suite.prepare_root
+    if getattr(args, "asset_root", None) is None:
+        args.asset_root = suite.asset_root
+    if getattr(args, "op", None) is None:
+        args.op = suite.default_op
+
+    if not args.prepare_root.is_dir():
+        raise RuntimeError(
+            missing_artifact_message(
+                suite=suite,
+                path=args.prepare_root,
+                artifact="prepare root",
+            )
+        )
+    return suite.metadata()
+
+
+def _default_summary_output_dir(output_root: Path, suite_metadata: dict[str, Any] | None) -> Path:
+    if suite_metadata is not None and isinstance(suite_metadata.get("name"), str):
+        return output_root.parent / str(suite_metadata["name"])
+    return output_root / "summary"
 
 
 def command_generate_scripts(args: argparse.Namespace) -> int:
+    suite_metadata = _resolved_suite_args(args)
     selection_args = argparse.Namespace(**vars(args))
     selection_args.kernel_source = None
     buckets = _selected_buckets(selection_args)
@@ -320,6 +369,11 @@ def command_generate_scripts(args: argparse.Namespace) -> int:
     asset_root = args.asset_root.resolve() if args.asset_root else None
     output_root = args.output_root.resolve()
     catalog_root = output_root / "catalog" / "v2"
+    summary_output_dir = (
+        args.summary_output_dir.resolve()
+        if getattr(args, "summary_output_dir", None)
+        else _default_summary_output_dir(output_root, suite_metadata)
+    )
     benchmark_runner = args.benchmark_runner or resolve_tool("iree-benchmark-loom", tool_dir=args.tool_dir)
     benchmark_runner = benchmark_runner or "iree-benchmark-loom"
     benchmark_device = getattr(args, "benchmark_device", None) or "amdgpu"
@@ -383,6 +437,7 @@ def command_generate_scripts(args: argparse.Namespace) -> int:
             benchmark_runner=benchmark_runner,
             benchmark_device=benchmark_device,
             benchmark_measure=benchmark_measure,
+            suite_metadata=suite_metadata,
         )
         _write_json_file(route_dir / "manifest.json", route_manifest)
         _write_executable_script(
@@ -418,6 +473,7 @@ def command_generate_scripts(args: argparse.Namespace) -> int:
                 "route_count": len(op_routes),
                 "case_count": sum(int(route["case_count"]) for route in op_routes),
                 "routes": op_routes,
+                **({"suite": suite_metadata} if suite_metadata is not None else {}),
             },
         )
         _write_executable_script(op_dir / "run-all.sh", _run_all_script_text(level="op"))
@@ -434,14 +490,28 @@ def command_generate_scripts(args: argparse.Namespace) -> int:
         "ops": ops,
         "routes": generated_routes,
     }
+    if suite_metadata is not None:
+        index["suite"] = suite_metadata
     _write_json_file(catalog_root / "index.json", index)
     _write_executable_script(catalog_root / "run-all.sh", _run_all_script_text(level="catalog"))
-    print(json.dumps(index, indent=2, sort_keys=True))
+    write_benchmark_route_summary(
+        output_root=output_root,
+        catalog_root=catalog_root,
+        summary_output_dir=summary_output_dir,
+        routes=[
+            _load_json(Path(route["manifest_path"]))
+            for route in generated_routes
+        ],
+        suite_metadata=suite_metadata,
+    )
+    if not getattr(args, "quiet", False):
+        print(json.dumps(index, indent=2, sort_keys=True))
     return 0
 
 
 def _add_common_selection_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--prepare-root", type=Path, required=True)
+    parser.add_argument("--suite", help="named benchmark suite that supplies prepared descriptor artifact paths")
+    parser.add_argument("--prepare-root", type=Path)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--asset-root", type=Path)
     parser.add_argument("--op")
@@ -456,8 +526,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Materialize descriptor-backed Loom kernel benchmark scripts."
     )
+    parser.add_argument("--list-suites", action="store_true", help="list built-in benchmark suite aliases")
+    parser.add_argument("--describe-suite", help="print one built-in benchmark suite alias")
     _add_common_selection_args(parser)
     parser.add_argument("--output-root", type=Path, default=Path("build/benchmarks/loom-kernels"))
+    parser.add_argument("--summary-output-dir", type=Path)
     parser.add_argument("--tool-dir")
     parser.add_argument("--benchmark-runner")
     parser.add_argument("--benchmark-device", default="amdgpu")
@@ -468,10 +541,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_suites() -> None:
+    payload = {"suites": [suite.metadata() for suite in list_suites()]}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _print_suite(name: str, *, repo_root: Path) -> None:
+    suite = get_suite(name, repo_root=repo_root)
+    print(json.dumps({"suite": suite.metadata()}, indent=2, sort_keys=True))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.list_suites:
+            _print_suites()
+            return 0
+        if args.describe_suite:
+            _print_suite(args.describe_suite, repo_root=args.repo_root)
+            return 0
         return command_generate_scripts(args)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
